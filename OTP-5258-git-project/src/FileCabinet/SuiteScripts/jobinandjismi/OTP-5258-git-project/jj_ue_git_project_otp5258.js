@@ -19,7 +19,7 @@ define(['N/record', 'N/search'],
          */
         const beforeLoad = (scriptContext) => {
             log.debug('Hi','hi');
-            log.debug('Hello','Hellooo')
+            log.debug('Hello','Hellooo');
         }
 
         /**
