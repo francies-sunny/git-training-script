@@ -19,6 +19,8 @@ define(['N/record', 'N/search'],
          */
         const beforeLoad = (scriptContext) => {
 
+            log.debug('hi','hiiii')
+
         }
 
         /**
