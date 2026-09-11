@@ -1,4 +1,24 @@
 <manifest projecttype="ACCOUNTCUSTOMIZATION">
-    <projectname>TTRX-1 NS TTRX Integration</projectname>
-    <frameworkversion>1.0</frameworkversion>
+  <projectname>TTRX-1 NS TTRX Integration</projectname>
+  <frameworkversion>1.0</frameworkversion>
+  <dependencies>
+    <features>
+      <feature required="false">SUITESIGNON</feature>
+      <feature required="false">ASSEMBLIES</feature>
+      <feature required="false">MULTILANGUAGE</feature>
+      <feature required="true">LOCATIONS</feature>
+      <feature required="false">MATRIXITEMS</feature>
+      <feature required="false">CRM</feature>
+      <feature required="false">INVENTORY</feature>
+      <feature required="false">EXTREMELIST</feature>
+      <feature required="false">CHARGEBASEDBILLING</feature>
+      <feature required="false">MAILMERGE</feature>
+      <feature required="true">CUSTOMRECORDS</feature>
+      <feature required="true">SUBSIDIARIES</feature>
+      <feature required="true">BINMANAGEMENT</feature>
+      <feature required="false">WEBSITE</feature>
+      <feature required="false">CUSTOMSEGMENTS</feature>
+      <feature required="false">ACCOUNTING</feature>
+    </features>
+  </dependencies>
 </manifest>
