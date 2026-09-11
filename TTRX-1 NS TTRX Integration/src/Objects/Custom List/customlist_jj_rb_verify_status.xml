@@ -1,0 +1,29 @@
+<customlist scriptid="customlist_jj_rb_verify_status">
+  <description>Per-line digital-verification state of received stock. Set to Awaiting Verification when the Item Receipt lands the line in the on-hold bin, and moved on by the inventory-release call that bin-transfers the verified quantity to the good bin.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Verify Status</name>
+  <customvalues>
+    <customvalue scriptid="val_not_required">
+      <isinactive>F</isinactive>
+      <value>Not Required</value>
+    </customvalue>
+    <customvalue scriptid="val_awaiting">
+      <isinactive>F</isinactive>
+      <value>Awaiting Verification</value>
+    </customvalue>
+    <customvalue scriptid="val_partial">
+      <isinactive>F</isinactive>
+      <value>Partially Verified</value>
+    </customvalue>
+    <customvalue scriptid="val_verified">
+      <isinactive>F</isinactive>
+      <value>Verified</value>
+    </customvalue>
+    <customvalue scriptid="val_failed">
+      <isinactive>F</isinactive>
+      <value>Verification Failed</value>
+    </customvalue>
+  </customvalues>
+</customlist>

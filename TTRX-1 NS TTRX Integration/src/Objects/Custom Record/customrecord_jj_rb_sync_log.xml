@@ -2290,7 +2290,7 @@
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>The NetSuite order this work item matched: the Purchase Order or Sales Order.</description>
+      <description>The NetSuite transaction this work item concerns - the order, or the receipt or fulfilment created from it. MARKED AS THE PARENT FIELD, so every Sync Log row for a transaction renders as a RapidBridge Sync Log sublist on that transaction. This is the link from a record to its full error detail: the class, the code, the request and the response all live on the log row.</description>
       <displayheight></displayheight>
       <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
@@ -2299,10 +2299,10 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>SELECT</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The NetSuite order this work item matched: the Purchase Order or Sales Order.</help>
+      <help>The NetSuite transaction this work item concerns. Marked as the parent field, so the Sync Log rows appear as a sublist on the transaction itself.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
-      <isparent>F</isparent>
+      <isparent>T</isparent>
       <label>Related Transaction</label>
       <linktext></linktext>
       <maxlength></maxlength>
