@@ -1,0 +1,21 @@
+<customlist scriptid="customlist_jj_rb_bin_property">
+  <description>Storage conditions, sent semicolon-separated.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Bin Property</name>
+  <customvalues>
+    <customvalue scriptid="val_cold">
+      <isinactive>F</isinactive>
+      <value>COLD</value>
+    </customvalue>
+    <customvalue scriptid="val_frozen">
+      <isinactive>F</isinactive>
+      <value>FROZEN</value>
+    </customvalue>
+    <customvalue scriptid="val_restricted_access">
+      <isinactive>F</isinactive>
+      <value>RESTRICTED_ACCESS</value>
+    </customvalue>
+  </customvalues>
+</customlist>

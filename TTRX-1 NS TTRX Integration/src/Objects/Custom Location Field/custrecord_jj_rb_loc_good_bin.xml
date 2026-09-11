@@ -1,0 +1,35 @@
+<othercustomfield scriptid="custrecord_jj_rb_loc_good_bin">
+  <accesslevel>2</accesslevel>
+  <applyformatting>F</applyformatting>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>The destination of the inventory release. Once TrackTrace verification passes, the Middleware calls the inventory-release endpoint and NetSuite creates a BIN TRANSFER from the on-hold bin to this bin. Not an Inventory Status Change - that feature is deliberately not used.</description>
+  <displayheight></displayheight>
+  <displaytype>NORMAL</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>SELECT</fieldtype>
+  <help>The destination of the inventory release. Once TrackTrace verification passes, the Middleware calls the inventory-release endpoint and NetSuite creates a BIN TRANSFER from the on-hold bin to this bin. Not an Inventory Status Change - that feature is deliberately not used.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>RapidBridge Good Bin</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <rectype>-103</rectype>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype>-242</selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>T</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</othercustomfield>

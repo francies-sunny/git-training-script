@@ -1,0 +1,57 @@
+<customlist scriptid="customlist_jj_rb_operation">
+  <description>What was asked of the Middleware.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Sync Operation</name>
+  <customvalues>
+    <customvalue scriptid="val_create">
+      <isinactive>F</isinactive>
+      <value>Create</value>
+    </customvalue>
+    <customvalue scriptid="val_update">
+      <isinactive>F</isinactive>
+      <value>Update</value>
+    </customvalue>
+    <customvalue scriptid="val_delete">
+      <isinactive>F</isinactive>
+      <value>Delete</value>
+    </customvalue>
+    <customvalue scriptid="val_inactivate">
+      <isinactive>F</isinactive>
+      <value>Inactivate</value>
+    </customvalue>
+    <customvalue scriptid="val_reactivate">
+      <isinactive>F</isinactive>
+      <value>Reactivate</value>
+    </customvalue>
+    <customvalue scriptid="val_query">
+      <isinactive>F</isinactive>
+      <value>Query</value>
+    </customvalue>
+    <customvalue scriptid="val_void">
+      <isinactive>F</isinactive>
+      <value>Void</value>
+    </customvalue>
+    <customvalue scriptid="val_approve">
+      <isinactive>F</isinactive>
+      <value>Approve</value>
+    </customvalue>
+    <customvalue scriptid="val_unapprove">
+      <isinactive>F</isinactive>
+      <value>Unapprove</value>
+    </customvalue>
+    <customvalue scriptid="val_transform">
+      <isinactive>F</isinactive>
+      <value>Transform</value>
+    </customvalue>
+    <customvalue scriptid="val_close">
+      <isinactive>F</isinactive>
+      <value>Close</value>
+    </customvalue>
+    <customvalue scriptid="val_release">
+      <isinactive>F</isinactive>
+      <value>Release</value>
+    </customvalue>
+  </customvalues>
+</customlist>

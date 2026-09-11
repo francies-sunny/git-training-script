@@ -1,0 +1,73 @@
+<customlist scriptid="customlist_jj_rb_sync_type">
+  <description>Which master record this work item is about. Drives reconciliation filters and saved searches.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Sync Type</name>
+  <customvalues>
+    <customvalue scriptid="val_item">
+      <isinactive>F</isinactive>
+      <value>Item</value>
+    </customvalue>
+    <customvalue scriptid="val_dosage_form">
+      <isinactive>F</isinactive>
+      <value>Dosage Form</value>
+    </customvalue>
+    <customvalue scriptid="val_customer">
+      <isinactive>F</isinactive>
+      <value>Customer</value>
+    </customvalue>
+    <customvalue scriptid="val_vendor">
+      <isinactive>F</isinactive>
+      <value>Vendor</value>
+    </customvalue>
+    <customvalue scriptid="val_address">
+      <isinactive>F</isinactive>
+      <value>Address</value>
+    </customvalue>
+    <customvalue scriptid="val_location">
+      <isinactive>F</isinactive>
+      <value>Location</value>
+    </customvalue>
+    <customvalue scriptid="val_bin">
+      <isinactive>F</isinactive>
+      <value>Bin</value>
+    </customvalue>
+    <customvalue scriptid="val_bin_query">
+      <isinactive>F</isinactive>
+      <value>Bin Query</value>
+    </customvalue>
+    <customvalue scriptid="val_reconciliation">
+      <isinactive>F</isinactive>
+      <value>Reconciliation</value>
+    </customvalue>
+    <customvalue scriptid="val_purchase_order">
+      <isinactive>F</isinactive>
+      <value>Purchase Order</value>
+    </customvalue>
+    <customvalue scriptid="val_sales_order">
+      <isinactive>F</isinactive>
+      <value>Sales Order</value>
+    </customvalue>
+    <customvalue scriptid="val_item_receipt">
+      <isinactive>F</isinactive>
+      <value>Item Receipt</value>
+    </customvalue>
+    <customvalue scriptid="val_item_fulfilment">
+      <isinactive>F</isinactive>
+      <value>Item Fulfilment</value>
+    </customvalue>
+    <customvalue scriptid="val_transaction_fetch">
+      <isinactive>F</isinactive>
+      <value>Transaction Fetch</value>
+    </customvalue>
+    <customvalue scriptid="val_shipment">
+      <isinactive>F</isinactive>
+      <value>Shipment</value>
+    </customvalue>
+    <customvalue scriptid="val_inventory_release">
+      <isinactive>F</isinactive>
+      <value>Inventory Release</value>
+    </customvalue>
+  </customvalues>
+</customlist>

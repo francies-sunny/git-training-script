@@ -1,0 +1,57 @@
+<customlist scriptid="customlist_jj_rb_recon_reason">
+  <description>Why a record appears on the reconciliation page. The single most useful field for the user.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Recon Reason</name>
+  <customvalues>
+    <customvalue scriptid="val_never_synced">
+      <isinactive>F</isinactive>
+      <value>Never synced</value>
+    </customvalue>
+    <customvalue scriptid="val_payload_changed">
+      <isinactive>F</isinactive>
+      <value>Payload changed since last sync</value>
+    </customvalue>
+    <customvalue scriptid="val_last_failed">
+      <isinactive>F</isinactive>
+      <value>Last sync failed</value>
+    </customvalue>
+    <customvalue scriptid="val_modified_after_try">
+      <isinactive>F</isinactive>
+      <value>Modified after last sync try</value>
+    </customvalue>
+    <customvalue scriptid="val_never_evaluated">
+      <isinactive>F</isinactive>
+      <value>Never evaluated</value>
+    </customvalue>
+    <customvalue scriptid="val_no_uom_detail">
+      <isinactive>F</isinactive>
+      <value>Item has no UOM Detail</value>
+    </customvalue>
+    <customvalue scriptid="val_missing_parent_uuid">
+      <isinactive>F</isinactive>
+      <value>Missing parent UUID</value>
+    </customvalue>
+    <customvalue scriptid="val_inactive_not_synced">
+      <isinactive>F</isinactive>
+      <value>Inactive but not synced</value>
+    </customvalue>
+    <customvalue scriptid="val_not_eligible">
+      <isinactive>F</isinactive>
+      <value>Not eligible - check classification</value>
+    </customvalue>
+    <customvalue scriptid="val_duplicate_open">
+      <isinactive>F</isinactive>
+      <value>Duplicate open work items</value>
+    </customvalue>
+    <customvalue scriptid="val_retry_exhausted">
+      <isinactive>F</isinactive>
+      <value>Retry exhausted</value>
+    </customvalue>
+    <customvalue scriptid="val_awaiting_decision">
+      <isinactive>F</isinactive>
+      <value>Awaiting manual decision</value>
+    </customvalue>
+  </customvalues>
+</customlist>

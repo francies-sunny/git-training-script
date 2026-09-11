@@ -1,0 +1,17 @@
+<customlist scriptid="customlist_jj_rb_log_role">
+  <description>Derived convenience. Says whether a log row is the first call of a work item or a later one. The authority is whether Related Parent Record is blank (v3.1 section 12.2); this field only makes filtering and list views readable.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Log Record Role</name>
+  <customvalues>
+    <customvalue scriptid="val_parent">
+      <isinactive>F</isinactive>
+      <value>Parent (main sync)</value>
+    </customvalue>
+    <customvalue scriptid="val_child">
+      <isinactive>F</isinactive>
+      <value>Child (retry / new sync)</value>
+    </customvalue>
+  </customvalues>
+</customlist>

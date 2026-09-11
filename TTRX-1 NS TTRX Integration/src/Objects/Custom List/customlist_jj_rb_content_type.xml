@@ -1,0 +1,17 @@
+<customlist scriptid="customlist_jj_rb_content_type">
+  <description>How the body is encoded.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Content Type</name>
+  <customvalues>
+    <customvalue scriptid="val_form_urlencoded">
+      <isinactive>F</isinactive>
+      <value>application/x-www-form-urlencoded</value>
+    </customvalue>
+    <customvalue scriptid="val_json">
+      <isinactive>F</isinactive>
+      <value>application/json</value>
+    </customvalue>
+  </customvalues>
+</customlist>

@@ -1,0 +1,45 @@
+<customlist scriptid="customlist_jj_rb_sync_status">
+  <description>The state of the whole work item. Main records only - leave blank on a child. Distinct from Call Outcome (v3.1 section 12.3). Drives every worklist.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Work Item Status</name>
+  <customvalues>
+    <customvalue scriptid="val_open_pending_retry">
+      <isinactive>F</isinactive>
+      <value>Open - Pending Retry</value>
+    </customvalue>
+    <customvalue scriptid="val_open_retrying">
+      <isinactive>F</isinactive>
+      <value>Open - Retrying</value>
+    </customvalue>
+    <customvalue scriptid="val_open_failed">
+      <isinactive>F</isinactive>
+      <value>Open - Failed</value>
+    </customvalue>
+    <customvalue scriptid="val_open_needs_review">
+      <isinactive>F</isinactive>
+      <value>Open - Needs Review</value>
+    </customvalue>
+    <customvalue scriptid="val_closed_success">
+      <isinactive>F</isinactive>
+      <value>Closed - Success</value>
+    </customvalue>
+    <customvalue scriptid="val_closed_resolved">
+      <isinactive>F</isinactive>
+      <value>Closed - Resolved</value>
+    </customvalue>
+    <customvalue scriptid="val_closed_merged">
+      <isinactive>F</isinactive>
+      <value>Closed - Merged</value>
+    </customvalue>
+    <customvalue scriptid="val_closed_cancelled">
+      <isinactive>F</isinactive>
+      <value>Closed - Cancelled</value>
+    </customvalue>
+    <customvalue scriptid="val_closed_no_action">
+      <isinactive>F</isinactive>
+      <value>Closed - No Action Needed</value>
+    </customvalue>
+  </customvalues>
+</customlist>

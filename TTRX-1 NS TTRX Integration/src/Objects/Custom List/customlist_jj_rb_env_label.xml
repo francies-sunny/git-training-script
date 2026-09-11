@@ -1,0 +1,21 @@
+<customlist scriptid="customlist_jj_rb_env_label">
+  <description>What this configuration row is for. The execution-environment gate compares it with runtime.envType before any outbound call (SAFE Q1.20). After a sandbox refresh the copied row still says PRODUCTION, which is exactly what the gate detects.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Environment Label</name>
+  <customvalues>
+    <customvalue scriptid="val_production">
+      <isinactive>F</isinactive>
+      <value>PRODUCTION</value>
+    </customvalue>
+    <customvalue scriptid="val_sandbox">
+      <isinactive>F</isinactive>
+      <value>SANDBOX</value>
+    </customvalue>
+    <customvalue scriptid="val_dev">
+      <isinactive>F</isinactive>
+      <value>DEV</value>
+    </customvalue>
+  </customvalues>
+</customlist>

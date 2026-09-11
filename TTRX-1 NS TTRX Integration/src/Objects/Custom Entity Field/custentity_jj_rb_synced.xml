@@ -1,0 +1,51 @@
+<entitycustomfield scriptid="custentity_jj_rb_synced">
+  <accesslevel>2</accesslevel>
+  <appliestocontact>F</appliestocontact>
+  <appliestocustomer>T</appliestocustomer>
+  <appliestoemployee>F</appliestoemployee>
+  <appliestogroup>F</appliestogroup>
+  <appliestoothername>F</appliestoothername>
+  <appliestopartner>F</appliestopartner>
+  <appliestopricelist>F</appliestopricelist>
+  <appliestoprojecttemplate>F</appliestoprojecttemplate>
+  <appliestostatement>F</appliestostatement>
+  <appliestovendor>T</appliestovendor>
+  <appliestowebsite>F</appliestowebsite>
+  <applyformatting>F</applyformatting>
+  <availableexternally>F</availableexternally>
+  <availabletosso>F</availabletosso>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>The last attempt succeeded. Set true only on success. Defaults to unchecked.</description>
+  <displayheight></displayheight>
+  <displaytype>DISABLED</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>CHECKBOX</fieldtype>
+  <globalsearch>F</globalsearch>
+  <help>The last attempt succeeded. Set true only on success. Defaults to unchecked.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <isparent>F</isparent>
+  <label>RapidBridge Partner Synced</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <parentsubtab></parentsubtab>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype></selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>F</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+  <subtab>[scriptid=custtab_jj_rb_entity]</subtab>
+</entitycustomfield>

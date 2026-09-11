@@ -1,0 +1,73 @@
+<customlist scriptid="customlist_jj_rb_recon_method">
+  <description>How a work item was resolved. The audit answer to 'what did someone do about it?'</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Recon Method</name>
+  <customvalues>
+    <customvalue scriptid="val_auto_retry">
+      <isinactive>F</isinactive>
+      <value>Auto retry</value>
+    </customvalue>
+    <customvalue scriptid="val_manual_retry">
+      <isinactive>F</isinactive>
+      <value>Manual retry</value>
+    </customvalue>
+    <customvalue scriptid="val_edit_replay">
+      <isinactive>F</isinactive>
+      <value>Edit and replay</value>
+    </customvalue>
+    <customvalue scriptid="val_force_resync">
+      <isinactive>F</isinactive>
+      <value>Force resync - hash cleared</value>
+    </customvalue>
+    <customvalue scriptid="val_create_uom">
+      <isinactive>F</isinactive>
+      <value>Create missing UOM Detail</value>
+    </customvalue>
+    <customvalue scriptid="val_sync_parent">
+      <isinactive>F</isinactive>
+      <value>Sync parent then retry</value>
+    </customvalue>
+    <customvalue scriptid="val_repair_field">
+      <isinactive>F</isinactive>
+      <value>Repair field then retry</value>
+    </customvalue>
+    <customvalue scriptid="val_recover_uuid">
+      <isinactive>F</isinactive>
+      <value>Recover lost UUID</value>
+    </customvalue>
+    <customvalue scriptid="val_reverse_resync">
+      <isinactive>F</isinactive>
+      <value>Reverse and re-sync</value>
+    </customvalue>
+    <customvalue scriptid="val_accept_remote">
+      <isinactive>F</isinactive>
+      <value>Accept remote state</value>
+    </customvalue>
+    <customvalue scriptid="val_merge_duplicates">
+      <isinactive>F</isinactive>
+      <value>Merge duplicate work items</value>
+    </customvalue>
+    <customvalue scriptid="val_reclassify">
+      <isinactive>F</isinactive>
+      <value>Reclassify eligibility</value>
+    </customvalue>
+    <customvalue scriptid="val_ignore_duplicate">
+      <isinactive>F</isinactive>
+      <value>Ignore - duplicate</value>
+    </customvalue>
+    <customvalue scriptid="val_ignore_scope">
+      <isinactive>F</isinactive>
+      <value>Ignore - out of scope</value>
+    </customvalue>
+    <customvalue scriptid="val_escalate_tt">
+      <isinactive>F</isinactive>
+      <value>Escalate to TrackTrace</value>
+    </customvalue>
+    <customvalue scriptid="val_escalate_dev">
+      <isinactive>F</isinactive>
+      <value>Escalate to developer</value>
+    </customvalue>
+  </customvalues>
+</customlist>

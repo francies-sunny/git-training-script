@@ -1,0 +1,41 @@
+<customlist scriptid="customlist_jj_rb_attempt_trigger">
+  <description>What caused this particular call. Initial appears only on a main record.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Call Trigger</name>
+  <customvalues>
+    <customvalue scriptid="val_initial">
+      <isinactive>F</isinactive>
+      <value>Initial</value>
+    </customvalue>
+    <customvalue scriptid="val_auto_retry">
+      <isinactive>F</isinactive>
+      <value>Auto Retry</value>
+    </customvalue>
+    <customvalue scriptid="val_manual_retry">
+      <isinactive>F</isinactive>
+      <value>Manual Retry</value>
+    </customvalue>
+    <customvalue scriptid="val_new_sync">
+      <isinactive>F</isinactive>
+      <value>New Sync</value>
+    </customvalue>
+    <customvalue scriptid="val_mass_update">
+      <isinactive>F</isinactive>
+      <value>Mass Update</value>
+    </customvalue>
+    <customvalue scriptid="val_csv_import">
+      <isinactive>F</isinactive>
+      <value>CSV Import</value>
+    </customvalue>
+    <customvalue scriptid="val_reconciliation">
+      <isinactive>F</isinactive>
+      <value>Reconciliation Sweep</value>
+    </customvalue>
+    <customvalue scriptid="val_dependency_presync">
+      <isinactive>F</isinactive>
+      <value>Dependency Pre-sync</value>
+    </customvalue>
+  </customvalues>
+</customlist>

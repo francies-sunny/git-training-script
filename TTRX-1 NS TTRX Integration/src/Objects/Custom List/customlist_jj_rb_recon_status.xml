@@ -1,0 +1,29 @@
+<customlist scriptid="customlist_jj_rb_recon_status">
+  <description>Whether a human still owes an action.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Recon Status</name>
+  <customvalues>
+    <customvalue scriptid="val_not_required">
+      <isinactive>F</isinactive>
+      <value>Not required</value>
+    </customvalue>
+    <customvalue scriptid="val_open">
+      <isinactive>F</isinactive>
+      <value>Open</value>
+    </customvalue>
+    <customvalue scriptid="val_in_progress">
+      <isinactive>F</isinactive>
+      <value>In progress</value>
+    </customvalue>
+    <customvalue scriptid="val_resolved">
+      <isinactive>F</isinactive>
+      <value>Resolved</value>
+    </customvalue>
+    <customvalue scriptid="val_wont_fix">
+      <isinactive>F</isinactive>
+      <value>Won't fix</value>
+    </customvalue>
+  </customvalues>
+</customlist>

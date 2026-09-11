@@ -1,0 +1,29 @@
+<customlist scriptid="customlist_jj_rb_direction">
+  <description>Which way the data moved. Master data is always outbound; the value exists so the same log serves transactions later.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Sync Direction</name>
+  <customvalues>
+    <customvalue scriptid="val_outbound">
+      <isinactive>F</isinactive>
+      <value>Outbound (NS - MW)</value>
+    </customvalue>
+    <customvalue scriptid="val_inbound">
+      <isinactive>F</isinactive>
+      <value>Inbound (MW - NS)</value>
+    </customvalue>
+    <customvalue scriptid="val_internal">
+      <isinactive>F</isinactive>
+      <value>Internal</value>
+    </customvalue>
+    <customvalue scriptid="val_inbound_query">
+      <isinactive>F</isinactive>
+      <value>Inbound Query (MW - NS read)</value>
+    </customvalue>
+    <customvalue scriptid="val_internal_repair">
+      <isinactive>F</isinactive>
+      <value>Internal Repair</value>
+    </customvalue>
+  </customvalues>
+</customlist>

@@ -1,0 +1,21 @@
+<customlist scriptid="customlist_jj_rb_if_create_status">
+  <description>The status the Middleware creates Item Fulfilments in. Maps to the NetSuite shipstatus field: Picked = A, Packed = B, Shipped = C. Configured per client; Shipped for this client.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Item Fulfilment Create Status</name>
+  <customvalues>
+    <customvalue scriptid="val_picked">
+      <isinactive>F</isinactive>
+      <value>Picked</value>
+    </customvalue>
+    <customvalue scriptid="val_packed">
+      <isinactive>F</isinactive>
+      <value>Packed</value>
+    </customvalue>
+    <customvalue scriptid="val_shipped">
+      <isinactive>F</isinactive>
+      <value>Shipped</value>
+    </customvalue>
+  </customvalues>
+</customlist>

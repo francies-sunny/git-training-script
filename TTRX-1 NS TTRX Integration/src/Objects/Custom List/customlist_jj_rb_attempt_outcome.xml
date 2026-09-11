@@ -1,0 +1,25 @@
+<customlist scriptid="customlist_jj_rb_attempt_outcome">
+  <description>The result of this record's own API call. Present on every log record, main and child. Never rewritten.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Call Outcome</name>
+  <customvalues>
+    <customvalue scriptid="val_success">
+      <isinactive>F</isinactive>
+      <value>Success</value>
+    </customvalue>
+    <customvalue scriptid="val_failure">
+      <isinactive>F</isinactive>
+      <value>Failure</value>
+    </customvalue>
+    <customvalue scriptid="val_skipped">
+      <isinactive>F</isinactive>
+      <value>Skipped</value>
+    </customvalue>
+    <customvalue scriptid="val_dry_run">
+      <isinactive>F</isinactive>
+      <value>Dry Run</value>
+    </customvalue>
+  </customvalues>
+</customlist>

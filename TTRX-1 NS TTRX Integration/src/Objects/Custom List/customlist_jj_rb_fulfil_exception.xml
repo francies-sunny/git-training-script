@@ -1,0 +1,37 @@
+<customlist scriptid="customlist_jj_rb_fulfil_exception">
+  <description>The reason a picker declares when a pick falls short. NetSuite supplies this list and serves it to the mobile app over the fulfilment-exception endpoint (TrackTrace 7 Sep Q1). A short quantity with a declared reason is a SUCCESS, not an error. Confirm the value set with the client before go-live.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Fulfilment Exception Reason</name>
+  <customvalues>
+    <customvalue scriptid="val_short_stock">
+      <isinactive>F</isinactive>
+      <value>Short stock at the bin</value>
+    </customvalue>
+    <customvalue scriptid="val_damaged">
+      <isinactive>F</isinactive>
+      <value>Damaged on inspection</value>
+    </customvalue>
+    <customvalue scriptid="val_expired">
+      <isinactive>F</isinactive>
+      <value>Expired or short-dated</value>
+    </customvalue>
+    <customvalue scriptid="val_not_found">
+      <isinactive>F</isinactive>
+      <value>Not found at the location</value>
+    </customvalue>
+    <customvalue scriptid="val_serial_mismatch">
+      <isinactive>F</isinactive>
+      <value>Serial mismatch</value>
+    </customvalue>
+    <customvalue scriptid="val_qty_mismatch">
+      <isinactive>F</isinactive>
+      <value>Quantity mismatch on count</value>
+    </customvalue>
+    <customvalue scriptid="val_other_investigate">
+      <isinactive>F</isinactive>
+      <value>Other - raise an investigation</value>
+    </customvalue>
+  </customvalues>
+</customlist>

@@ -1,0 +1,35 @@
+<othercustomfield scriptid="custrecord_jj_rb_bin_props">
+  <accesslevel>2</accesslevel>
+  <applyformatting>F</applyformatting>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>Storage conditions for this bin. Sent to the Middleware semicolon-separated as properties: COLD, FROZEN, RESTRICTED_ACCESS.</description>
+  <displayheight></displayheight>
+  <displaytype>NORMAL</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>MULTISELECT</fieldtype>
+  <help>Storage conditions for this bin. Sent to the Middleware semicolon-separated as properties: COLD, FROZEN, RESTRICTED_ACCESS.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>Storage Properties</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <rectype>-242</rectype>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype>[scriptid=customlist_jj_rb_bin_property]</selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>F</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</othercustomfield>

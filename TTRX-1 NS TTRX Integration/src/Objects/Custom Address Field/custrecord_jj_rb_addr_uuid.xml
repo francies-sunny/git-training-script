@@ -1,0 +1,36 @@
+<othercustomfield scriptid="custrecord_jj_rb_addr_uuid">
+  <accesslevel>2</accesslevel>
+  <applyformatting>F</applyformatting>
+  <applytoallforms>T</applytoallforms>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>The Middleware address UUID. Written on success only. Addresses have no hash or try fields of their own - the parent record's hash covers the address set.</description>
+  <displayheight></displayheight>
+  <displaytype>DISABLED</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>TEXT</fieldtype>
+  <help>The Middleware address UUID. Written on success only. Addresses have no hash or try fields of their own - the parent record's hash covers the address set.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>TrackTrace Address UUID</label>
+  <linktext></linktext>
+  <maxlength>64</maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <rectype>-289</rectype>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype></selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>F</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</othercustomfield>

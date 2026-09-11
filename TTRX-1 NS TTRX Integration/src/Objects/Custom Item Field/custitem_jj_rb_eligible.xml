@@ -1,0 +1,52 @@
+<itemcustomfield scriptid="custitem_jj_rb_eligible">
+  <accesslevel>2</accesslevel>
+  <appliestoexpense>F</appliestoexpense>
+  <appliestogroup>F</appliestogroup>
+  <appliestoinventory>T</appliestoinventory>
+  <appliestoitemassembly>T</appliestoitemassembly>
+  <appliestokit>T</appliestokit>
+  <appliestononinventory>F</appliestononinventory>
+  <appliestoothercharge>F</appliestoothercharge>
+  <appliestopricelist>F</appliestopricelist>
+  <appliestoservice>F</appliestoservice>
+  <appliestospecificitems>F</appliestospecificitems>
+  <appliestosubplan>F</appliestosubplan>
+  <applyformatting>F</applyformatting>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection>[scriptid=customlist_jj_rb_eligibility.val_no]</defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>Whether the item is TrackTrace-regulated and therefore syncable. Yes, No or Auto. Defaults to No. Only sterilized / TrackTrace-regulated items are considered for sync. The field id read at runtime is configurable - see Eligibility Field ID on the RapidBridge Configuration record.</description>
+  <displayheight></displayheight>
+  <displaytype>NORMAL</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>SELECT</fieldtype>
+  <globalsearch>F</globalsearch>
+  <help>Whether the item is TrackTrace-regulated and therefore syncable. Yes, No or Auto. Defaults to No. Only sterilized / TrackTrace-regulated items are considered for sync. The field id read at runtime is configurable - see Eligibility Field ID on the RapidBridge Configuration record.</help>
+  <includechilditems>F</includechilditems>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <isparent>F</isparent>
+  <itemmatrix>F</itemmatrix>
+  <itemsubtype>BOTH</itemsubtype>
+  <label>TrackTrace Eligibility</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <parentsubtab></parentsubtab>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype>[scriptid=customlist_jj_rb_eligibility]</selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>F</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+  <subtab>[scriptid=custtab_jj_rb_item]</subtab>
+</itemcustomfield>

@@ -1,0 +1,37 @@
+<customlist scriptid="customlist_jj_rb_saleable_unit">
+  <description>The unit a UOM Detail represents. This is the value that must be unique per item among active rows.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Saleable Unit</name>
+  <customvalues>
+    <customvalue scriptid="val_each">
+      <isinactive>F</isinactive>
+      <value>Each</value>
+    </customvalue>
+    <customvalue scriptid="val_case">
+      <isinactive>F</isinactive>
+      <value>Case</value>
+    </customvalue>
+    <customvalue scriptid="val_pallet">
+      <isinactive>F</isinactive>
+      <value>Pallet</value>
+    </customvalue>
+    <customvalue scriptid="val_pair">
+      <isinactive>F</isinactive>
+      <value>Pair</value>
+    </customvalue>
+    <customvalue scriptid="val_box">
+      <isinactive>F</isinactive>
+      <value>Box</value>
+    </customvalue>
+    <customvalue scriptid="val_bottle">
+      <isinactive>F</isinactive>
+      <value>Bottle</value>
+    </customvalue>
+    <customvalue scriptid="val_carton">
+      <isinactive>F</isinactive>
+      <value>Carton</value>
+    </customvalue>
+  </customvalues>
+</customlist>

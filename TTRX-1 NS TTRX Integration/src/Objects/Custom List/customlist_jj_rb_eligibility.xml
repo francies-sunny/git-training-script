@@ -1,0 +1,21 @@
+<customlist scriptid="customlist_jj_rb_eligibility">
+  <description>Whether an item is TrackTrace-regulated and therefore syncable.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Eligibility</name>
+  <customvalues>
+    <customvalue scriptid="val_yes">
+      <isinactive>F</isinactive>
+      <value>Yes</value>
+    </customvalue>
+    <customvalue scriptid="val_no">
+      <isinactive>F</isinactive>
+      <value>No</value>
+    </customvalue>
+    <customvalue scriptid="val_auto">
+      <isinactive>F</isinactive>
+      <value>Auto</value>
+    </customvalue>
+  </customvalues>
+</customlist>

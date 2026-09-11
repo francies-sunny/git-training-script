@@ -1,0 +1,53 @@
+<customlist scriptid="customlist_jj_rb_doc_err">
+  <description>Document-level rejection codes returned by the inbound RESTlet. These are checked before anything is built, and a failure returns without touching a record. Part of the published API contract.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Inbound Document Error</name>
+  <customvalues>
+    <customvalue scriptid="val_missing_request_uuid">
+      <isinactive>F</isinactive>
+      <value>MISSING_REQUEST_UUID</value>
+    </customvalue>
+    <customvalue scriptid="val_app_key_rejected">
+      <isinactive>F</isinactive>
+      <value>APP_KEY_REJECTED</value>
+    </customvalue>
+    <customvalue scriptid="val_malformed_payload">
+      <isinactive>F</isinactive>
+      <value>MALFORMED_PAYLOAD</value>
+    </customvalue>
+    <customvalue scriptid="val_bad_field_type">
+      <isinactive>F</isinactive>
+      <value>BAD_FIELD_TYPE</value>
+    </customvalue>
+    <customvalue scriptid="val_field_too_long">
+      <isinactive>F</isinactive>
+      <value>FIELD_TOO_LONG</value>
+    </customvalue>
+    <customvalue scriptid="val_too_many_lines">
+      <isinactive>F</isinactive>
+      <value>TOO_MANY_LINES</value>
+    </customvalue>
+    <customvalue scriptid="val_order_not_found">
+      <isinactive>F</isinactive>
+      <value>ORDER_NOT_FOUND</value>
+    </customvalue>
+    <customvalue scriptid="val_order_not_at_gate">
+      <isinactive>F</isinactive>
+      <value>ORDER_NOT_AT_GATE</value>
+    </customvalue>
+    <customvalue scriptid="val_duplicate_request">
+      <isinactive>F</isinactive>
+      <value>DUPLICATE_REQUEST_UUID</value>
+    </customvalue>
+    <customvalue scriptid="val_line_validation_failed">
+      <isinactive>F</isinactive>
+      <value>LINE_VALIDATION_FAILED</value>
+    </customvalue>
+    <customvalue scriptid="val_save_refused">
+      <isinactive>F</isinactive>
+      <value>SAVE_REFUSED</value>
+    </customvalue>
+  </customvalues>
+</customlist>

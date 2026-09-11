@@ -1,0 +1,25 @@
+<customlist scriptid="customlist_jj_rb_http_method">
+  <description>Recorded on each attempt for support.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge HTTP Method</name>
+  <customvalues>
+    <customvalue scriptid="val_get">
+      <isinactive>F</isinactive>
+      <value>GET</value>
+    </customvalue>
+    <customvalue scriptid="val_post">
+      <isinactive>F</isinactive>
+      <value>POST</value>
+    </customvalue>
+    <customvalue scriptid="val_put">
+      <isinactive>F</isinactive>
+      <value>PUT</value>
+    </customvalue>
+    <customvalue scriptid="val_delete">
+      <isinactive>F</isinactive>
+      <value>DELETE</value>
+    </customvalue>
+  </customvalues>
+</customlist>

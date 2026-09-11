@@ -1,0 +1,25 @@
+<customlist scriptid="customlist_jj_rb_error_class">
+  <description>Decides whether anything retries automatically.</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Error Class</name>
+  <customvalues>
+    <customvalue scriptid="val_retryable">
+      <isinactive>F</isinactive>
+      <value>Retryable</value>
+    </customvalue>
+    <customvalue scriptid="val_auth">
+      <isinactive>F</isinactive>
+      <value>Auth</value>
+    </customvalue>
+    <customvalue scriptid="val_poison">
+      <isinactive>F</isinactive>
+      <value>Poison</value>
+    </customvalue>
+    <customvalue scriptid="val_business">
+      <isinactive>F</isinactive>
+      <value>Business</value>
+    </customvalue>
+  </customvalues>
+</customlist>

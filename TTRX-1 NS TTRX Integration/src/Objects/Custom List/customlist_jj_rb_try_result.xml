@@ -1,0 +1,61 @@
+<customlist scriptid="customlist_jj_rb_try_result">
+  <description>The outcome of the last evaluation of a master record, whether or not an API call happened. Written together with Last Sync Try Date/Time (v3.1 section 11.5).</description>
+  <isinactive>F</isinactive>
+  <ismatrixoption>F</ismatrixoption>
+  <isordered>T</isordered>
+  <name>RapidBridge Sync Try Result</name>
+  <customvalues>
+    <customvalue scriptid="val_synced">
+      <isinactive>F</isinactive>
+      <value>Synced - API succeeded</value>
+    </customvalue>
+    <customvalue scriptid="val_no_change">
+      <isinactive>F</isinactive>
+      <value>No change - payload identical</value>
+    </customvalue>
+    <customvalue scriptid="val_skip_ineligible">
+      <isinactive>F</isinactive>
+      <value>Skipped - not eligible</value>
+    </customvalue>
+    <customvalue scriptid="val_skip_feature">
+      <isinactive>F</isinactive>
+      <value>Skipped - feature disabled</value>
+    </customvalue>
+    <customvalue scriptid="val_block_no_uom">
+      <isinactive>F</isinactive>
+      <value>Blocked - no UOM Detail</value>
+    </customvalue>
+    <customvalue scriptid="val_block_no_parent">
+      <isinactive>F</isinactive>
+      <value>Blocked - missing parent UUID</value>
+    </customvalue>
+    <customvalue scriptid="val_fail_api">
+      <isinactive>F</isinactive>
+      <value>Failed - API error</value>
+    </customvalue>
+    <customvalue scriptid="val_fail_pre_api">
+      <isinactive>F</isinactive>
+      <value>Failed - before API call</value>
+    </customvalue>
+    <customvalue scriptid="val_deferred">
+      <isinactive>F</isinactive>
+      <value>Deferred - inline cap</value>
+    </customvalue>
+    <customvalue scriptid="val_dry_run">
+      <isinactive>F</isinactive>
+      <value>Dry run</value>
+    </customvalue>
+    <customvalue scriptid="val_suppressed_env">
+      <isinactive>F</isinactive>
+      <value>Suppressed - environment gate</value>
+    </customvalue>
+    <customvalue scriptid="val_deferred_approval">
+      <isinactive>F</isinactive>
+      <value>Deferred - awaiting approval</value>
+    </customvalue>
+    <customvalue scriptid="val_deferred_maintenance">
+      <isinactive>F</isinactive>
+      <value>Deferred - upstream maintenance</value>
+    </customvalue>
+  </customvalues>
+</customlist>
