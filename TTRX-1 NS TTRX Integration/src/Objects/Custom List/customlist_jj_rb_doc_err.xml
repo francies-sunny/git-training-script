@@ -3,7 +3,7 @@
   <isinactive>F</isinactive>
   <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
-  <name>RapidBridge Inbound Document Error</name>
+  <name>RapidBridge Inbound Doc Error</name>
   <customvalues>
     <customvalue scriptid="val_missing_request_uuid">
       <isinactive>F</isinactive>

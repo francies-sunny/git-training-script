@@ -7,7 +7,7 @@
   <defaultvalue></defaultvalue>
   <description>What the last evaluation concluded.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

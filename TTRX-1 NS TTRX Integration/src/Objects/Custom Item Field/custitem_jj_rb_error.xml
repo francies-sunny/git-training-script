@@ -18,7 +18,7 @@
   <defaultvalue></defaultvalue>
   <description>Roll-up of unit failures. Cleared when all active units succeed.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

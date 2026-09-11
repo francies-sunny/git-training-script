@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_bin_uuid">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -7,9 +8,10 @@
   <defaultvalue></defaultvalue>
   <description>The Middleware storage_area UUID for this bin. Written on success only.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXT</fieldtype>
   <help>The Middleware storage_area UUID for this bin. Written on success only.</help>

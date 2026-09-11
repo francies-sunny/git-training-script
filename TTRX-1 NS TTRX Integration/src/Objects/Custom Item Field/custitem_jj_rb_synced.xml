@@ -18,7 +18,7 @@
   <defaultvalue></defaultvalue>
   <description>All ACTIVE UOM units for this item synced successfully. Roll-up. Defaults to unchecked. Maintained by RapidBridge - do not edit.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

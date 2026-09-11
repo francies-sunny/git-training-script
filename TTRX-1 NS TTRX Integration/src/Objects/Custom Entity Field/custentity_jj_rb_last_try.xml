@@ -20,7 +20,7 @@
   <defaultvalue></defaultvalue>
   <description>Every time this record is evaluated by a sync process, call or no call (v3.1 section 11.5).</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

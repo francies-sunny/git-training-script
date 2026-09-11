@@ -19,7 +19,7 @@
     </customvalue>
     <customvalue scriptid="val_skip_feature">
       <isinactive>F</isinactive>
-      <value>Skipped - feature disabled</value>
+      <value>Skipped - feature LOCKED</value>
     </customvalue>
     <customvalue scriptid="val_block_no_uom">
       <isinactive>F</isinactive>

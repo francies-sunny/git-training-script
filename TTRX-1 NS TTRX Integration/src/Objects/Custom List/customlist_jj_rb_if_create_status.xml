@@ -3,7 +3,7 @@
   <isinactive>F</isinactive>
   <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
-  <name>RapidBridge Item Fulfilment Create Status</name>
+  <name>RapidBridge IF Create Status</name>
   <customvalues>
     <customvalue scriptid="val_picked">
       <isinactive>F</isinactive>

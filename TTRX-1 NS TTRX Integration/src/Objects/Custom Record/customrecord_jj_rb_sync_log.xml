@@ -18,7 +18,6 @@
   <enablenumbering>F</enablenumbering>
   <enableoptimisticlocking>T</enableoptimisticlocking>
   <enablesystemnotes>T</enablesystemnotes>
-  <externalrolepermissionlevel>NONE</externalrolepermissionlevel>
   <hierarchical>F</hierarchical>
   <icon></icon>
   <iconbuiltin>T</iconbuiltin>

@@ -18,7 +18,7 @@
   <defaultvalue></defaultvalue>
   <description>Roll-up of the unit outcomes of the last evaluation, worst first.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

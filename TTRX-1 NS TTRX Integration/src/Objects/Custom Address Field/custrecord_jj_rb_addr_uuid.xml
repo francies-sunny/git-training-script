@@ -8,7 +8,7 @@
   <defaultvalue></defaultvalue>
   <description>The Middleware address UUID. Written on success only. Addresses have no hash or try fields of their own - the parent record's hash covers the address set.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

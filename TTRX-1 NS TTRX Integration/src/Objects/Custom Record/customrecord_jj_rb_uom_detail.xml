@@ -18,7 +18,6 @@
   <enablenumbering>F</enablenumbering>
   <enableoptimisticlocking>T</enableoptimisticlocking>
   <enablesystemnotes>T</enablesystemnotes>
-  <externalrolepermissionlevel>NONE</externalrolepermissionlevel>
   <hierarchical>F</hierarchical>
   <icon></icon>
   <iconbuiltin>T</iconbuiltin>
@@ -413,7 +412,7 @@
       <defaultvalue></defaultvalue>
       <description>The Middleware product UUID for this unit. Written on success only. Maintained by RapidBridge - do not edit.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -453,7 +452,7 @@
       <defaultvalue></defaultvalue>
       <description>SHA-256 of the payload last SUCCESSFULLY sent. The trigger comparison. Never written on failure (v3.1 section 11.3). Maintained by RapidBridge - do not edit.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -493,7 +492,7 @@
       <defaultvalue></defaultvalue>
       <description>The last attempt succeeded. Set true ONLY on success. Defaults to unchecked.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -533,7 +532,7 @@
       <defaultvalue></defaultvalue>
       <description>When the last SUCCESSFUL API sync happened.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -573,7 +572,7 @@
       <defaultvalue></defaultvalue>
       <description>Last time this row was evaluated by any sync process, whether or not an API call happened (v3.1 section 11.5). Compared with lastmodified to detect missed records.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -613,7 +612,7 @@
       <defaultvalue></defaultvalue>
       <description>What the last evaluation concluded. Written together with Last Sync Try.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
@@ -653,7 +652,7 @@
       <defaultvalue></defaultvalue>
       <description>Last failure reason. Cleared on a later success.</description>
       <displayheight></displayheight>
-      <displaytype>DISABLED</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>

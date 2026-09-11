@@ -20,7 +20,7 @@
   <defaultvalue></defaultvalue>
   <description>Last failure reason. Cleared on a later success.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

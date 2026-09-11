@@ -7,7 +7,7 @@
   <defaultvalue></defaultvalue>
   <description>The last attempt succeeded. Set true only on success. Defaults to unchecked.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>

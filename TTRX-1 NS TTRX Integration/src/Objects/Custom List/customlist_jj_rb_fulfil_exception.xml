@@ -3,7 +3,7 @@
   <isinactive>F</isinactive>
   <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
-  <name>RapidBridge Fulfilment Exception Reason</name>
+  <name>RapidBridge Fulfil Exception</name>
   <customvalues>
     <customvalue scriptid="val_short_stock">
       <isinactive>F</isinactive>

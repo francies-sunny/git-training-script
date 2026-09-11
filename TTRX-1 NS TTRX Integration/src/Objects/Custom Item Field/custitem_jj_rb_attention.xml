@@ -18,7 +18,7 @@
   <defaultvalue></defaultvalue>
   <description>Drives the reconciliation page. Defaults to unchecked. Maintained by RapidBridge.</description>
   <displayheight></displayheight>
-  <displaytype>DISABLED</displaytype>
+  <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>
