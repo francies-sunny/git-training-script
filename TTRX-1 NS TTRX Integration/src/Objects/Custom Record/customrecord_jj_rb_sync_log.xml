@@ -2242,6 +2242,246 @@
       <storevalue>T</storevalue>
       <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_recon]</subtab>
     </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_shipment_uuid">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>The remote shipment this work item belongs to. A shipment may carry several transactions, so several Sync Log rows can share one shipment uuid - this is what replaces the shipment-to-transaction link record.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>TEXT</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>The remote shipment this work item belongs to. A shipment may carry several transactions, so several Sync Log rows can share one shipment uuid - this is what replaces the shipment-to-transaction link record.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Shipment UUID</label>
+      <linktext></linktext>
+      <maxlength>64</maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_transaction">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>The NetSuite order this work item matched: the Purchase Order or Sales Order.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>SELECT</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>The NetSuite order this work item matched: the Purchase Order or Sales Order.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Related Transaction</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype>-30</selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_txn_result">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>The NetSuite record created from the shipment: the Item Receipt or Item Fulfilment. One per transaction, per proposal v4 section 6.2.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>SELECT</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>The NetSuite record created from the shipment: the Item Receipt or Item Fulfilment. One per transaction, per proposal v4 section 6.2.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Resulting Transaction</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype>-30</selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_qty_covered">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>How many units of this shipment belong to the related transaction. Set only when one shipment spans more than one order; blank in the ordinary one-to-one case.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>INTEGER</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>How many units of this shipment belong to the related transaction. Set only when one shipment spans more than one order; blank in the ordinary one-to-one case.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Quantity Covered</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_line_total">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>Total line count in the inbound payload, for reconciling a partial write.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>INTEGER</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>Total line count in the inbound payload, for reconciling a partial write.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Lines In Payload</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_line_sent">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>Lines actually written. A value below Lines In Payload on a SUCCESS row means a declared fulfilment exception, not an error.</description>
+      <displayheight></displayheight>
+      <displaytype>LOCKED</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>INTEGER</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>Lines actually written. A value below Lines In Payload on a SUCCESS row means a declared fulfilment exception, not an error.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Lines Written</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_txn]</subtab>
+    </customrecordcustomfield>
   </customrecordcustomfields>
   <subtabs>
     <subtab scriptid="tab_rb_sl_apicall">
@@ -2267,6 +2507,10 @@
     <subtab scriptid="tab_rb_sl_recon">
       <tabparent></tabparent>
       <tabtitle>Reconciliation</tabtitle>
+    </subtab>
+    <subtab scriptid="tab_rb_sl_txn">
+      <tabparent></tabparent>
+      <tabtitle>Transaction</tabtitle>
     </subtab>
   </subtabs>
 </customrecordtype>
