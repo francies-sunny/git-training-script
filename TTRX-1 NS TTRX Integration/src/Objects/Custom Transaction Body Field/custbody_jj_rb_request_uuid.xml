@@ -1,4 +1,4 @@
-<transactionbodycustomfield scriptid="custbody_jj_rb_origin">
+<transactionbodycustomfield scriptid="custbody_jj_rb_request_uuid">
   <accesslevel>2</accesslevel>
   <applyformatting>F</applyformatting>
   <bodycustomerpayment>F</bodycustomerpayment>
@@ -25,8 +25,8 @@
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
-  <defaultvalue>NETSUITE</defaultvalue>
-  <description>NETSUITE when this record started here; MIDDLEWARE when the Middleware created it. The audit answer to where did this come from.</description>
+  <defaultvalue></defaultvalue>
+  <description>The request_uuid of the most recent Middleware call about this record. Each inbound call carries its own; this holds the latest, so the record points at the Sync Log row for the call that last touched it. NOT the duplicate guard - the FIRST call&apos;s request_uuid lives in the native externalId, where the platform enforces uniqueness per record type, and it is never overwritten. This field is a convenience copy and must never be used to test for a duplicate.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
@@ -35,13 +35,13 @@
   <fieldtype>TEXT</fieldtype>
   <fldsizelabel></fldsizelabel>
   <globalsearch>F</globalsearch>
-  <help>NETSUITE when this record started here; MIDDLEWARE when the Middleware created it. The audit answer to where did this come from.</help>
+  <help>The request_uuid of the most recent Middleware call about this record. Each inbound call carries its own; this holds the latest, so the record points at the Sync Log row for the call that last touched it. NOT the duplicate guard - the FIRST call&apos;s request_uuid lives in the native externalId, where the platform enforces uniqueness per record type, and it is never overwritten. This field is a convenience copy and must never be used to test for a duplicate.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>
-  <label>RapidBridge Record Origin</label>
+  <label>Latest Request UUID</label>
   <linktext></linktext>
-  <maxlength>20</maxlength>
+  <maxlength>64</maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
   <onparentdelete></onparentdelete>

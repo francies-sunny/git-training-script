@@ -242,6 +242,46 @@
       <storevalue>T</storevalue>
       <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_details]</subtab>
     </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_request_uuid">
+      <accesslevel>2</accesslevel>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue></defaultvalue>
+      <description>The request_uuid this call carried. On an inbound call it is the Middleware&apos;s own identifier for the submission, and on the create call it is also written to the record&apos;s native externalId, where NetSuite enforces uniqueness per record type - which is what makes a replayed submission safe. Blank on an outbound call, which NetSuite originates.</description>
+      <displayheight></displayheight>
+      <displaytype>NORMAL</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>TEXT</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>The request_uuid this call carried. On an inbound call it is the Middleware&apos;s own identifier for the submission, and on the create call it is also written to the record&apos;s native externalId, where NetSuite enforces uniqueness per record type - which is what makes a replayed submission safe. Blank on an outbound call, which NetSuite originates.</help>
+      <isformula>F</isformula>
+      <ismandatory>F</ismandatory>
+      <isparent>F</isparent>
+      <label>Request UUID</label>
+      <linktext></linktext>
+      <maxlength>64</maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_apicall]</subtab>
+    </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_direction">
       <accesslevel>2</accesslevel>
       <allowquickadd>F</allowquickadd>

@@ -1,4 +1,4 @@
-<transactionbodycustomfield scriptid="custbody_jj_rb_origin">
+<transactionbodycustomfield scriptid="custbody_jj_rb_scan_session">
   <accesslevel>2</accesslevel>
   <applyformatting>F</applyformatting>
   <bodycustomerpayment>F</bodycustomerpayment>
@@ -25,8 +25,8 @@
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
-  <defaultvalue>NETSUITE</defaultvalue>
-  <description>NETSUITE when this record started here; MIDDLEWARE when the Middleware created it. The audit answer to where did this come from.</description>
+  <defaultvalue></defaultvalue>
+  <description>The Middleware's scan session identifier. Audit, and the link back to what was physically scanned.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
@@ -35,13 +35,13 @@
   <fieldtype>TEXT</fieldtype>
   <fldsizelabel></fldsizelabel>
   <globalsearch>F</globalsearch>
-  <help>NETSUITE when this record started here; MIDDLEWARE when the Middleware created it. The audit answer to where did this come from.</help>
+  <help>The Middleware's scan session identifier. Audit, and the link back to what was physically scanned.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>
-  <label>RapidBridge Record Origin</label>
+  <label>RapidS1 Scan Session ID</label>
   <linktext></linktext>
-  <maxlength>20</maxlength>
+  <maxlength>60</maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
   <onparentdelete></onparentdelete>
