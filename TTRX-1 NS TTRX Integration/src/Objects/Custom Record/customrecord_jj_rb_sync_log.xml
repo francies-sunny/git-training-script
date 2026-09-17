@@ -962,7 +962,7 @@
       <storevalue>T</storevalue>
       <subtab></subtab>
     </customrecordcustomfield>
-    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_hash">
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_payload">
       <accesslevel>2</accesslevel>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
@@ -970,22 +970,22 @@
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>SHA-256 of the payload this work item is currently trying to reach. Updated in place when a new sync joins an open work item (v3.1 section 12.7.6). Main records only.</description>
+      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXT</fieldtype>
+      <fieldtype>TEXTAREA</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>SHA-256 of the payload this work item is currently trying to reach. Updated in place when a new sync joins an open work item (v3.1 section 12.7.6). Main records only.</help>
+      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
-      <label>Target Payload Hash</label>
+      <label>Target Payload</label>
       <linktext></linktext>
-      <maxlength>64</maxlength>
+      <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
       <onparentdelete></onparentdelete>
@@ -1802,7 +1802,7 @@
       <storevalue>T</storevalue>
       <subtab></subtab>
     </customrecordcustomfield>
-    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_attempt_hash">
+    <customrecordcustomfield scriptid="custrecord_jj_rb_sl_attempt_payload">
       <accesslevel>2</accesslevel>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
@@ -1810,22 +1810,22 @@
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>The SHA-256 hash actually sent on THIS call. Differs from the main record target hash when the record changed between calls - this is what makes the history readable.</description>
+      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXT</fieldtype>
+      <fieldtype>TEXTAREA</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The SHA-256 hash actually sent on THIS call. Differs from the main record target hash when the record changed between calls - this is what makes the history readable.</help>
+      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
-      <label>Attempt Hash</label>
+      <label>Attempt Payload</label>
       <linktext></linktext>
-      <maxlength>64</maxlength>
+      <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
       <onparentdelete></onparentdelete>

@@ -19,6 +19,15 @@
       <feature required="false">WEBSITE</feature>
       <feature required="false">CUSTOMSEGMENTS</feature>
       <feature required="false">ACCOUNTING</feature>
+      <feature required="false">EXPREPORTS</feature>
+      <feature required="false">ADVRECEIVING</feature>
+      <feature required="false">MULTILOCINVT</feature>
+      <feature required="false">OPPORTUNITIES</feature>
+      <feature required="false">RECEIVABLES</feature>
+      <feature required="false">WEBSTORE</feature>
+      <feature required="false">PAYABLES</feature>
+      <feature required="false">TIMETRACKING</feature>
+      <feature required="false">WEBSERVICES</feature>
     </features>
   </dependencies>
 </manifest>
