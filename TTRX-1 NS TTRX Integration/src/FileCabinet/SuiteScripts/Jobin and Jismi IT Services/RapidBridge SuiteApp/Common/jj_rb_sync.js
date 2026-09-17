@@ -12,72 +12,95 @@
  *   2. build the payload     (the ONLY record-specific step)
  *   3. stringify it canonically
  *   4. compare with the stored payload string → identical AND synced AND uuid ⇒ skip
- *   5. resolve the log target: MAIN record, or CHILD of an open one (§12.5)
- *   6. call — creating exactly ONE log record
+ *   5. resolve the logIo target: MAIN record, or CHILD of an open one (§12.5)
+ *   6. call — creating exactly ONE logIo record
  *   7. on success: write uuid + payload + synced=true + CLEAR the error
  *      on failure: leave synced=false, set the error, schedule a retry
  *      ALWAYS: stamp last_try + try_result (§11.5)
  *   8. roll up (items only)
  *
- * PHASE 1 SCOPE: Dosage Form and Location. Every other dispatch entry is
- * declared in jj_rb_core.js with `implemented:false` and fails LOUDLY here
- * rather than doing nothing quietly.
+ * IMPLEMENTED: Dosage Form · Location · Customer · Vendor · Item + UOM Detail.
+ * NOT YET: Bin (declared in C.MASTER with implemented:false — fails loudly).
  *
- * Master Data Developer Guide v3.4 §7.7, §10.1, §10.5, §10.6.
+ * Master Data Developer Guide v3.4 §7.7, §8, §9, §10.1–§10.6.
  */
 define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
   (record, search, runtime, core, io) => {
 
     const { C, util, lists, config } = core;
-    const { log, client } = io;
+    const { logIo, client } = io;
 
     // Cached across one execution only.
-    const DELETE_CACHE = {};   // recordType|id -> { uuid, name }
+    const DELETE_CACHE = {};   // recordType|id -> { uuid, name, uomUuids:[] }
     const STATE_CACHE = {};   // countryCode   -> { stateName: id }
     const PRESYNCED = {};   // recordType|id -> true, cycle guard for the cascade
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Small readers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const dedupe = (a) => a.filter((v, i) => a.indexOf(v) === i);
+
+    /** lookupFields gives scalars for text fields and [{value,text}] for selects. */
+    const textOf = (v) => {
+      if (Array.isArray(v)) return v.length ? (v[0].value || v[0].text || '') : '';
+      return (v === undefined || v === null) ? '' : String(v);
+    };
+    const labelOf = (v) => {
+      if (Array.isArray(v)) return v.length ? (v[0].text || '') : '';
+      return (v === undefined || v === null) ? '' : String(v);
+    };
+    /** '' collapses to undefined so canonical() drops it — a blank is not a value. */
+    const orNothing = (v) => (util.blank(v) ? undefined : v);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Sync units
     // ═══════════════════════════════════════════════════════════════════════════
 
+    /** The field-id block every unit carries, taken from the dispatch entry. */
+    const unitFields = (f) => ({
+      uuidField: f.uuid || null,
+      payloadField: f.payload || null,
+      syncedField: f.synced || null,
+      lastSyncField: f.lastSync || null,
+      lastTryField: f.lastTry || null,
+      tryResultField: f.tryResult || null,
+      errorField: f.error || null
+    });
+
     /**
-     * A unit is "one thing that gets one API call". For everything except Item it
-     * is the record itself; for an Item it is one per active UOM Detail row.
+     * A unit is "one thing that gets one API call".
      *
-     * @returns {{list:Array<Object>, blocked?:string}}
+     * For everything except Item it is the record itself. For an Item it is ONE
+     * PER ACTIVE UOM DETAIL ROW — an item with three active rows is three
+     * products in the Middleware, three UUIDs and three calls (§8.2).
+     *
+     * @returns {{list:Array<Object>, blocked?:string, blockedTry?:string}}
      */
     const resolveUnits = (entry, recordId, recordType, cfg, o) => {
-      const f = entry.fields || {};
+      if (entry.key === 'ITEM') return resolveItemUnits(entry, recordId, recordType, cfg, o);
 
-      const unit = {
+      const f = entry.fields || {};
+      const unit = Object.assign({
         recordType: recordType,
         recordId: recordId,
         uomId: null,
-        uuidField: f.uuid || null,
-        payloadField: f.payload || null,
-        syncedField: f.synced || null,
-        lastSyncField: f.lastSync || null,
-        lastTryField: f.lastTry || null,
-        tryResultField: f.tryResult || null,
-        errorField: f.error || null,
-        storedUuid: null, storedPayload: null, storedSynced: false,
+        storedUuid: null,
+        storedPayload: null,
+        storedSynced: false,
         data: {}
-      };
+      }, unitFields(f));
 
       const cols = [];
       Object.keys(f).forEach((k) => { if (f[k]) cols.push(f[k]); });
-
-      // The business fields each builder needs, read in ONE lookupFields.
       if (entry.key === 'DOSAGE') cols.push('name', 'isinactive');
-      if (entry.key === 'LOCATION')
-        cols.push('name', 'isinactive', 'parent', 'subsidiary', 'isinactive');
+      if (entry.key === 'LOCATION') cols.push('name', 'isinactive', 'parent', 'subsidiary');
+      if (entry.key === 'CUSTOMER' || entry.key === 'VENDOR')
+        cols.push('entityid', 'companyname', 'isinactive', 'phone', 'email', 'isperson', 'altname');
 
       let vals = {};
       try {
-        vals = search.lookupFields({
-          type: recordType, id: recordId,
-          columns: dedupe(cols)
-        });
+        vals = search.lookupFields({ type: recordType, id: recordId, columns: dedupe(cols) });
       } catch (e) {
         return {
           list: [], blocked: 'Record ' + recordType + '/' + recordId +
@@ -93,16 +116,105 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       return { list: [unit] };
     };
 
-    const dedupe = (a) => a.filter((v, i) => a.indexOf(v) === i);
+    /**
+     * §8.2 — one unit per ACTIVE UOM Detail row.
+     *
+     * An eligible item with no active row cannot sync. That is not an error to
+     * retry; it is a data gap only a person can close, so it goes to the
+     * reconciliation page with reason `Item has no UOM Detail`.
+     */
+    const resolveItemUnits = (entry, itemId, itemType, cfg, o) => {
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      const f = entry.fields;
 
-    /** lookupFields gives scalars for text fields and [{value,text}] for selects. */
-    const textOf = (v) => {
-      if (Array.isArray(v)) return v.length ? (v[0].value || v[0].text || '') : '';
-      return (v === undefined || v === null) ? '' : String(v);
-    };
-    const labelOf = (v) => {
-      if (Array.isArray(v)) return v.length ? (v[0].text || '') : '';
-      return (v === undefined || v === null) ? '' : String(v);
+      // The shared half of the payload: read from the item, once.
+      const itemCols = ['itemid', 'displayname', 'salesdescription', 'purchasedescription',
+        'isinactive', 'upccode', 'usebins',
+        f.eligible, f.dosage, f.strength, f.generic,
+        f.synced, f.lastSync, f.lastTry, f.tryResult, f.error, f.attention];
+      let item = {};
+      try {
+        item = search.lookupFields({
+          type: itemType, id: itemId,
+          columns: dedupe(itemCols.filter(Boolean))
+        });
+      } catch (e) {
+        return {
+          list: [], blocked: 'Item ' + itemType + '/' + itemId +
+            ' could not be read: ' + e.message
+        };
+      }
+
+      // The dosage CODE is what the Middleware keys on, not the NetSuite id.
+      const dosageId = textOf(item[f.dosage]);
+      let dosageCode = '';
+      if (dosageId) {
+        try {
+          const d = search.lookupFields({
+            type: C.REC.DOSAGE, id: dosageId,
+            columns: [C.MASTER.customrecord_jj_rb_dosage_form.fields.code]
+          });
+          dosageCode = textOf(d[C.MASTER.customrecord_jj_rb_dosage_form.fields.code]);
+        } catch (e) { /* left blank — the payload comparison will show it */ }
+      }
+
+      const rows = [];
+      try {
+        const cols = [U.unit, U.qty, U.upc, U.gtin, U.ndc, U.packSize, U.gs1Prefix,
+        U.gs1Id, U.uuid, U.payload, U.synced]
+          .map((c) => search.createColumn({ name: c }));
+        cols.push(search.createColumn({ name: 'internalid', sort: search.Sort.ASC }));
+        search.create({
+          type: C.REC.UOM,
+          filters: [[U.item, 'anyof', itemId], 'AND', ['isinactive', 'is', 'F']],
+          columns: cols
+        }).run().each((r) => {
+          rows.push({
+            id: r.getValue('internalid'),
+            unit: r.getText(U.unit) || r.getValue(U.unit),
+            qty: r.getValue(U.qty),
+            upc: r.getValue(U.upc),
+            gtin: r.getValue(U.gtin),
+            ndc: r.getValue(U.ndc),
+            packSize: r.getValue(U.packSize),
+            gs1Prefix: r.getValue(U.gs1Prefix),
+            gs1Id: r.getValue(U.gs1Id),
+            uuid: r.getValue(U.uuid),
+            payload: r.getValue(U.payload),
+            synced: util.truthy(r.getValue(U.synced))
+          });
+          return true;
+        });
+      } catch (e) {
+        return { list: [], blocked: 'UOM Detail rows unreadable: ' + e.message };
+      }
+
+      if (!rows.length)
+        return {
+          list: [], blocked: 'Item has no active UOM Detail row',
+          blockedTry: C.TRY.BLOCK_NO_UOM, reason: C.REASON.NO_UOM
+        };
+
+      // A UOM row saved directly syncs THAT row only — never its siblings (§10.3).
+      const wanted = o && o.onlyUomRowId
+        ? rows.filter((r) => String(r.id) === String(o.onlyUomRowId))
+        : rows;
+
+      const list = wanted.map((r) => Object.assign({
+        recordType: C.REC.UOM,          // the unit IS the UOM row
+        recordId: r.id,
+        uomId: r.id,
+        itemId: itemId,
+        itemType: itemType,
+        storedUuid: r.uuid || null,
+        storedPayload: r.payload || null,
+        storedSynced: r.synced,
+        data: item,                     // the shared half
+        uom: r,                        // the identity half
+        dosageCode: dosageCode
+      }, unitFields(U)));
+
+      return { list: list };
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -111,8 +223,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /**
      * §10.1 — Dosage Form. The simplest complete path: one unit, no children,
-     * no parent, no eligibility test. If this works end to end, the framework
-     * works.
+     * no parent, no eligibility test.
      */
     const buildDosageForm = (unit, cfg, entry) => {
       const f = entry.fields;
@@ -124,8 +235,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     };
 
     /**
-     * §10.6 — Location. One unit, an optional parent that must be synced first,
-     * and the address embedded so an address edit moves the comparison.
+     * §10.6 — Location. One unit, an optional parent that must be synced first.
+     * The address rides the comparison only; it is pushed as its own call.
      */
     const buildLocation = (unit, cfg, entry) => {
       const f = entry.fields;
@@ -133,30 +244,130 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         name: textOf(unit.data.name),
         is_active: !util.truthy(unit.data.isinactive),
         is_unselectable_location: false,
-        gs1_sgln: textOf(unit.data[f.sgln]) || undefined,
-        parent_location_uuid: unit.parentUuid || undefined
+        gs1_sgln: orNothing(textOf(unit.data[f.sgln])),
+        parent_location_uuid: orNothing(unit.parentUuid)
       };
 
-      // On create only. Accounts on Bin Management get their storage areas from
-      // real bins, so asking the Middleware for a default one would create a
-      // second, unmanaged storage area — §10.6 step 5 read against the v3.1
-      // bin decision.
+      // On create only, and only where the account has no bins. An account on
+      // Bin Management gets its storage areas from real bins, so asking for a
+      // default one would create a second, unmanaged storage area.
       if (!unit.storedUuid && !cfg.useBins) payload.create_default_storage_area = true;
 
-      // The address set is not its own object, so it rides IN the parent's
-      // payload. With a direct string comparison there is nothing to keep short,
-      // so the address goes in whole rather than as a digest - which means the
-      // stored payload shows exactly what was sent, and an address edit moves
-      // the comparison by itself.
-      const addr = locationAddress(unit);
-      if (addr) payload.address = {
-        nickname: addr.nickname, recipient_name: addr.addressee,
-        line1: addr.addr1, line2: addr.addr2, city: addr.city,
-        state: addr.state, zip: addr.zip, country_code: addr.country,
-        gs1_sgln: addr.sgln
-      };
+      const addr = locationAddresses(unit);
+      if (addr.length) payload[util.COMPARE_KEY] = { addresses: addr.map(compareAddr) };
 
       return payload;
+    };
+
+    /**
+     * §10.4 — Customer and Vendor. One builder, one dispatch entry each; the
+     * only difference is `type`.
+     */
+    const buildPartner = (unit, cfg, entry) => {
+      const f = entry.fields;
+      const d = unit.data;
+      const isPerson = util.truthy(d.isperson);
+      const name = (isPerson ? textOf(d.altname) : textOf(d.companyname)) || textOf(d.entityid);
+
+      const payload = {
+        type: entry.partnerType,                    // CUSTOMER | VENDOR
+        name: name,
+        is_active: !util.truthy(d.isinactive),
+        // The existing client code hardcodes ALL, subscribing every partner to
+        // every notification. Default NONE; it is a configuration value, not a
+        // property of the partner.
+        new_trx_notification_type: 'NONE',
+        external_reference: String(unit.recordId),
+        phone: orNothing(textOf(d.phone)),
+        notification_email: orNothing(textOf(d.email)),
+        gs1_id: orNothing(textOf(d[f.gln]))
+      };
+
+      // The idempotency key. Create only — it lets the Middleware upsert if our
+      // response is lost, and re-sending it on an update means nothing.
+      if (!unit.storedUuid) payload.custom_uuid = util.uuid();
+
+      const addrs = entityAddresses(unit);
+      if (addrs.length) payload[util.COMPARE_KEY] = { addresses: addrs.map(compareAddr) };
+
+      return payload;
+    };
+
+    /**
+     * §8.3 — Item / Product. Shared fields come from the ITEM; identity fields
+     * come from the UOM ROW. That split is what makes N products from one item.
+     */
+    const buildProduct = (unit, cfg, entry) => {
+      const f = entry.fields;
+      const d = unit.data;
+      const u = unit.uom;
+      const inactive = util.truthy(d.isinactive);
+
+      const payload = {
+        status: inactive ? 'RETIRED' : 'AVAILABLE',
+        is_active: !inactive,
+        sku: orNothing(textOf(d.itemid)),
+
+        product_descriptions: [{
+          language_code: cfg.language || 'en',
+          name: textOf(d.displayname) || textOf(d.itemid),
+          description: textOf(d.salesdescription) || textOf(d.displayname) ||
+            textOf(d.itemid)
+        }],
+
+        // identity — from the UOM row
+        upc: orNothing(u.upc || textOf(d.upccode)),
+        gtin14: orNothing(u.gtin),
+        gs1_company_prefix: orNothing(u.gs1Prefix),
+        gs1_id: orNothing(u.gs1Id),
+        pack_size: orNothing(u.packSize),
+        is_leaf_product: Number(u.qty) === 1,
+
+        // pharma
+        class_pharmaceutical__dosage_form: orNothing(unit.dosageCode),
+        class_pharmaceutical__strength: orNothing(textOf(d[f.strength])),
+        class_pharmaceutical__generic_name: orNothing(textOf(d[f.generic]))
+      };
+
+      if (!util.blank(u.ndc))
+        payload.product_identifiers = [{ identifier_code: 'US_NDC', value: u.ndc }];
+
+      Object.assign(payload, binState(d, cfg));
+
+      if (!unit.storedUuid) {
+        // Create only. `type` is immutable after create — a change to the
+        // product class is a business decision, not a PUT.
+        payload.type = cfg.productClassText || cfg.productClass || 'Pharmaceutical';
+        payload.custom_uuid = util.uuid();
+      } else {
+        // §8.5 — PUT is a FULL REPLACEMENT and needs explicit gate booleans.
+        // Forget them and the call returns 200 and changes nothing: a silent
+        // data-loss bug.
+        payload.update_product_descriptions = !!payload.product_descriptions;
+        payload.update_product_identifiers = !!payload.product_identifiers;
+        payload.update_requirements = false;
+        payload.update_packaging = false;
+      }
+
+      return payload;
+    };
+
+    /**
+     * §8.4 — a product is bin-managed only when the account feature, the
+     * RapidBridge switch and the item's own `usebins` all agree.
+     *
+     * This is part of the payload, so ticking Use Bins on an item moves the
+     * comparison and re-syncs by itself. No special handling needed.
+     */
+    const binState = (item, cfg) => {
+      let accountUsesBins = false;
+      try { accountUsesBins = runtime.isFeatureInEffect({ feature: 'BINMANAGEMENT' }); }
+      catch (e) { accountUsesBins = false; }
+      const itemUsesBins = util.truthy(item.usebins);
+      return {
+        is_bin_managed: !!(accountUsesBins && itemUsesBins && cfg.useBins === true),
+        bin_feature_enabled: !!accountUsesBins
+      };
     };
 
     /**
@@ -168,22 +379,32 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         address_nickname: addr.nickname || 'Main Address',
         recipient_name: addr.addressee || parentName || '',
         line1: addr.addr1 || '',
-        line2: addr.addr2 || undefined,
+        line2: orNothing(addr.addr2),
         city: addr.city || '',
         zip: addr.zip || '',
         country_code: addr.country || '',
-        gs1_sgln: addr.sgln || undefined
+        phone: orNothing(addr.phone),
+        gs1_sgln: orNothing(addr.sgln),
+        is_licence_required: false
       };
       const stateId = resolveStateId(addr.country, addr.state, cfg);
       if (stateId) body.state_id = stateId;     // omitted, never free text
       return body;
     };
 
+    /** The address fields that belong in the parent's comparison. */
+    const compareAddr = (a) => ({
+      nickname: a.nickname, addressee: a.addressee, line1: a.addr1, line2: a.addr2,
+      city: a.city, state: a.state, zip: a.zip, country: a.country, sgln: a.sgln
+    });
+
     const builders = {
       dosage: buildDosageForm,
       location: buildLocation,
+      entity: buildPartner,
+      item: buildProduct,
       address: buildAddress
-      // item, entity, bin: declared in C.MASTER, not yet built. See run().
+      // bin: declared in C.MASTER, not yet built. See run().
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -195,21 +416,42 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const trigger = o.trigger || C.TRIGGER.INITIAL;
       const correlation = o.correlation || util.uuid();
 
-      // Declared but not built. Fail loudly — a silent no-op here is the kind of
-      // thing that is discovered in production.
+      // A UOM row is not its own object — it is one unit of its parent item.
+      if (entry.key === 'UOM') return runUomRow(recordId, cfg, trigger, correlation);
+
       if (entry.implemented === false || !builders[entry.builder]) {
         const u = resolveUnits(entry, recordId, recordType, cfg, o);
-        if (u.list.length) log.stampTry(u.list[0], C.TRY.FAIL_PRE_API);
-        log.exception(entry, { type: recordType, id: recordId },
+        if (u.list.length) logIo.stampTry(u.list[0], C.TRY.FAIL_PRE_API);
+        logIo.exception(entry, { type: recordType, id: recordId },
           new Error('No builder for "' + entry.builder + '". ' + entry.key +
             ' is declared in the dispatch table but not implemented in ' +
             'this phase. Remove the deployment or add the builder.'));
         return [{ ok: false, notImplemented: true }];
       }
 
+      // §8.1 — eligibility, the first gate. An ineligible item is not an error.
+      if (entry.requiresEligibility && !isEligible(entry, recordId, recordType, cfg)) {
+        logIo.stampTry(itemStampUnit(entry, recordId, recordType), C.TRY.SKIP_INELIGIBLE);
+        return [{ skipped: true, reason: 'not eligible' }];
+      }
+
       const units = resolveUnits(entry, recordId, recordType, cfg, o);
+
       if (units.blocked) {
-        log.exception(entry, { type: recordType, id: recordId }, new Error(units.blocked));
+        // A blocked item still gets a work item, so it lands on the
+        // reconciliation page instead of vanishing.
+        const stampUnit = entry.key === 'ITEM'
+          ? itemStampUnit(entry, recordId, recordType) : null;
+        if (units.blockedTry && stampUnit) {
+          logIo.openDeferred({
+            entry: entry, unit: stampUnit, cfg: cfg,
+            reason: units.reason || C.REASON.NO_UOM,
+            correlation: correlation
+          });
+          logIo.stampTry(stampUnit, units.blockedTry);
+        } else {
+          logIo.exception(entry, { type: recordType, id: recordId }, new Error(units.blocked));
+        }
         return [{ ok: false, blocked: units.blocked }];
       }
 
@@ -218,36 +460,34 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
       units.list.forEach((unit, i) => {
 
-        // ── Beyond the cap: record the work item, let the sweep do the call.
         if (i >= inlineCap) {
-          log.openDeferred({
+          logIo.openDeferred({
             entry: entry, unit: unit, cfg: cfg,
             reason: C.REASON.PAYLOAD_CHANGED, correlation: correlation
           });
-          log.stampTry(unit, C.TRY.DEFERRED);
+          logIo.stampTry(unit, C.TRY.DEFERRED);
           results.push({ deferred: true });
           return;
         }
 
-        // ── Record-specific gates that stop a call before it is built.
         const gate = preflight(entry, unit, cfg);
         if (gate) {
-          log.stampTry(unit, gate.tryResult);
+          logIo.stampTry(unit, gate.tryResult);
           results.push({ skipped: true, reason: gate.reason });
           return;
         }
 
-        // ── Location: the parent must exist remotely before the child can name it.
+        // Location: the parent must exist remotely before the child can name it.
         if (entry.key === 'LOCATION') {
           const parentId = textOf(unit.data.parent);
           if (parentId) {
             const pu = ensureParentLocation(parentId, cfg, correlation);
             if (!pu) {
-              log.openDeferred({
+              logIo.openDeferred({
                 entry: entry, unit: unit, cfg: cfg,
                 reason: C.REASON.MISSING_PARENT, correlation: correlation
               });
-              log.stampTry(unit, C.TRY.BLOCK_NO_PARENT);
+              logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT);
               results.push({ ok: false, blocked: 'parent location not synced' });
               return;
             }
@@ -255,22 +495,22 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           }
         }
 
-        const payload = builders[entry.builder](unit, cfg, entry);       // step 2
+        const payload = builders[entry.builder](unit, cfg, entry);    // step 2
         const payloadStr = util.canonical(payload);                      // step 3
+        const sendBody = util.stripCompare(payload);
 
-        // ── step 4: THE TRIGGER TEST. A direct string comparison against the
-        //    payload the Middleware last accepted. Identical, already synced,
-        //    and a stored identifier ⇒ nothing to do and NO log record.
+        // ── step 4: THE TRIGGER TEST — a direct string comparison against the
+        //    payload the Middleware last accepted.
         if (util.samePayload(payloadStr, unit.storedPayload)
           && unit.storedSynced === true && unit.storedUuid) {
-          log.stampTry(unit, C.TRY.NO_CHANGE);
+          logIo.stampTry(unit, C.TRY.NO_CHANGE);
           results.push({ skipped: true, noChange: true });
           return;
         }
 
         const operation = unit.storedUuid ? C.OPERATION.UPDATE : C.OPERATION.CREATE;
 
-        const target = log.resolveLogTarget({                            // step 5
+        const target = logIo.resolveLogTarget({                            // step 5
           entry: entry, unit: unit, operation: operation, payload: payloadStr,
           cfg: cfg, reason: reasonFor(unit), triggeringParentId: o.parentId
         });
@@ -279,40 +519,110 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           entry: entry, unit: unit, cfg: cfg, target: target,
           endpoint: unit.storedUuid ? entry.endpoints.update : entry.endpoints.create,
           pathParams: { uuid: unit.storedUuid },
-          body: payload, operation: operation, payload: payloadStr,
-          trigger: trigger, correlation: correlation,
-          requestUuid: correlation
+          body: sendBody, operation: operation, payload: payloadStr,
+          trigger: trigger, correlation: correlation, requestUuid: correlation
         });
 
         if (res.ok) {                                                    // step 7
           writeBackSuccess(entry, unit, res.uuid || unit.storedUuid, payloadStr);
-          log.closeSuccess(target, res);
+          logIo.closeSuccess(target, res);
           results.push({ ok: true, uuid: res.uuid || unit.storedUuid });
 
-          // Children, after the parent has an identifier. §10.5.
           if (entry.hasChildren && cfg.useAddress)
             syncChildAddresses(entry, unit, res.uuid || unit.storedUuid, cfg,
               correlation, trigger);
 
         } else if (res.suppressed || res.dryRun) {
-          // Built, stringified, validated, logged — nothing sent. Not a failure:
-          // it does not increment retries and does not enter the worklist.
-          log.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
+          logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
           results.push({ ok: false, suppressed: true });
 
         } else if (res.skipped) {
-          log.stampTry(unit, C.TRY.FAIL_PRE_API);
+          logIo.stampTry(unit, C.TRY.FAIL_PRE_API);
           results.push({ ok: false, skipped: true });
 
         } else {
           writeBackFailure(entry, unit, res.errorMessage);
-          log.closeFailure(target, res, cfg);
-          results.push({ ok: false });
+          logIo.closeFailure(target, res, cfg);
+          results.push({ ok: false, error: res.errorMessage });
         }
       });
 
+      if (entry.key === 'ITEM') rollUpItem(entry, recordId, recordType, results);  // step 8
       return results;
     };
+
+    /**
+     * §10.3 — a UOM Detail row saved on its own. It is never its own object: it
+     * delegates to its parent item, and syncs THAT ROW ONLY. Touching siblings
+     * would turn one edit into N calls.
+     */
+    const runUomRow = (uomRowId, cfg, trigger, correlation) => {
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      let itemId = null;
+      try {
+        const v = search.lookupFields({ type: C.REC.UOM, id: uomRowId, columns: [U.item] });
+        itemId = textOf(v[U.item]);
+      } catch (e) { /* fall through */ }
+
+      if (!itemId) {
+        logIo.exception(C.MASTER.customrecord_jj_rb_uom_detail,
+          { type: C.REC.UOM, id: uomRowId },
+          new Error('UOM Detail row has no parent item — nothing to sync.'));
+        return [{ ok: false, blocked: 'no parent item' }];
+      }
+
+      const itemType = itemTypeOf(itemId);
+      if (!itemType) return [{ ok: false, blocked: 'parent item type unresolved' }];
+
+      return run({
+        entry: C.MASTER[itemType], recordId: itemId, recordType: itemType,
+        cfg: cfg, trigger: trigger, correlation: correlation,
+        onlyUomRowId: uomRowId
+      });
+    };
+
+    /**
+     * Which of the five item record types is this? The dispatch entry needs it.
+     * One search on the generic `item` type, reading `recordtype` — not five
+     * speculative lookupFields calls against types it probably is not.
+     */
+    const itemTypeOf = (itemId) => {
+      let t = null;
+      try {
+        search.create({
+          type: 'item',
+          filters: [['internalid', 'anyof', itemId]],
+          columns: ['recordtype']
+        }).run().each((r) => {
+          t = String(r.getValue('recordtype') || '').toLowerCase();
+          return false;
+        });
+      } catch (e) { return null; }
+      return (t && C.MASTER[t]) ? t : null;
+    };
+
+    /** §8.1 — only regulated items sync. Read from the CONFIGURED field id. */
+    const isEligible = (entry, recordId, recordType, cfg) => {
+      const fieldId = cfg.eligField || entry.fields.eligible;
+      if (!fieldId) return true;
+      let raw;
+      try {
+        const v = search.lookupFields({ type: recordType, id: recordId, columns: [fieldId] });
+        raw = labelOf(v[fieldId]) || textOf(v[fieldId]);
+      } catch (e) { return false; }
+
+      const s = String(raw).toUpperCase();
+      if (s === 'TRUE' || s === 'T' || s === 'YES') return true;
+      if (s === 'FALSE' || s === 'F' || s === 'NO') return false;
+      // AUTO has no agreed rule yet — §18 question 3. Refuse rather than guess.
+      return false;
+    };
+
+    /** A stamp-only unit for the ITEM record itself (it has no uuid of its own). */
+    const itemStampUnit = (entry, itemId, itemType) => Object.assign({
+      recordType: itemType, recordId: itemId, uomId: null,
+      storedUuid: null, storedPayload: null, storedSynced: false, data: {}
+    }, unitFields(entry.fields));
 
     /** Gates that belong to one record type and stop the call before it is built. */
     const preflight = (entry, unit, cfg) => {
@@ -323,10 +633,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         if (util.blank(textOf(unit.data[entry.fields.code])))
           return { tryResult: C.TRY.FAIL_PRE_API, reason: 'dosage code is blank' };
       }
-      // An inactive record is still synced — is_active:false is the payload that
-      // tells the Middleware — unless the account has opted out.
-      if (util.truthy(unit.data.isinactive) && cfg.syncInactive === false
-        && !unit.storedUuid)
+      if (util.truthy(unit.data.isinactive) && cfg.syncInactive === false && !unit.storedUuid)
         return { tryResult: C.TRY.SKIP_INELIGIBLE, reason: 'inactive, never synced' };
       return null;
     };
@@ -359,7 +666,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           options: { ignoreMandatoryFields: true }
         });
       } catch (e) {
-        log.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+        logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
 
@@ -385,20 +692,55 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           options: { ignoreMandatoryFields: true }
         });
       } catch (e) {
-        log.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+        logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
+    };
+
+    /**
+     * §8.6 — the item summarises its UOM rows. It has no stored payload of its
+     * own: the payloads live on the rows, because each row is a distinct object.
+     */
+    const rollUpItem = (entry, itemId, itemType, results) => {
+      const f = entry.fields;
+      const failed = results.filter((r) => r.ok === false).length;
+      const deferred = results.filter((r) => r.deferred).length;
+      const allOk = failed === 0 && deferred === 0 && results.length > 0;
+
+      const values = {};
+      if (f.synced) values[f.synced] = allOk;
+      if (f.attention) values[f.attention] = !allOk;
+      if (f.error) values[f.error] = allOk ? '' : summarise(results);
+      if (allOk && f.lastSync) values[f.lastSync] = new Date();
+      if (f.lastTry) values[f.lastTry] = new Date();
+      if (f.tryResult) values[f.tryResult] = lists.id(C.LIST.tryResult,
+        allOk ? C.TRY.SYNCED
+          : (deferred ? C.TRY.DEFERRED : C.TRY.FAIL_API));
+
+      try {
+        record.submitFields({
+          type: itemType, id: itemId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) {
+        logIo.exception(entry, { type: itemType, id: itemId }, e);
+      }
+    };
+
+    const summarise = (results) => {
+      const bad = results.filter((r) => r.ok === false);
+      const def = results.filter((r) => r.deferred).length;
+      const parts = [];
+      if (bad.length) parts.push(bad.length + ' of ' + results.length +
+        ' UOM row(s) failed: ' + dedupe(bad.map((r) => r.error || r.blocked || 'error'))
+          .join(' | '));
+      if (def) parts.push(def + ' deferred past the inline cap.');
+      return util.clip(parts.join(' '), 3900);
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Location parent cascade — §10.9
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Make sure the parent location carries a UUID, syncing it first if not.
-     * One level of recursion per call, guarded against a cycle.
-     *
-     * @returns {string|null} the parent's UUID, or null when it could not be got
-     */
     const ensureParentLocation = (parentId, cfg, correlation) => {
       const entry = C.MASTER.location;
       const key = 'location|' + parentId;
@@ -432,102 +774,158 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     // Addresses — §10.5
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Read the location's main address subrecord.
-     * NetSuite gives a Location one `mainaddress` subrecord, not a sublist.
-     */
-    const readLocationAddress = (locationId) => {
-      try {
-        const rec = record.load({ type: 'location', id: locationId, isDynamic: false });
-        const sub = rec.getSubrecord({ fieldId: 'mainaddress' });
-        if (!sub) return null;
-        const get = (f) => {
-          try { return sub.getValue({ fieldId: f }) || ''; }
-          catch (e) { return ''; }
-        };
-        const addr = {
-          nickname: get('addrphone') ? '' : '',      // NetSuite has no nickname here
-          addressee: get('addressee'),
-          addr1: get('addr1'), addr2: get('addr2'),
-          city: get('city'), state: get('state'),
-          zip: get('zip'), country: get('country'),
-          sgln: get(C.ADDR.sgln),
-          uuid: get(C.ADDR.uuid)
-        };
-        addr.nickname = 'Main Address';
-        const empty = !addr.addr1 && !addr.city && !addr.zip;
-        return empty ? null : addr;
-      } catch (e) {
-        log.exception(C.MASTER.location, { type: 'location', id: locationId }, e);
-        return null;
-      }
+    const readSub = (sub, f) => {
+      try { return sub.getValue({ fieldId: f }) || ''; } catch (e) { return ''; }
     };
 
-    /** Read once per unit — the builder and the child call both use it. */
-    const locationAddress = (unit) => {
-      if (unit.address === undefined) unit.address = readLocationAddress(unit.recordId);
-      return unit.address;
-    };
-
-    /** After the parent has an identifier, POST its address. */
-    const syncChildAddresses = (entry, unit, parentUuid, cfg, correlation, trigger) => {
-      const addr = locationAddress(unit);
-      if (!addr) return;
-
-      const body = buildAddress(addr, cfg, textOf(unit.data.name));
-
-      const addrUnit = {
-        recordType: unit.recordType, recordId: unit.recordId, uomId: null,
-        uuidField: null, payloadField: null, syncedField: null, lastSyncField: null,
-        lastTryField: null, tryResultField: null, errorField: null,
-        storedUuid: addr.uuid || null, storedPayload: null, storedSynced: false, data: {}
+    const addrFromSub = (sub, nickname, line) => {
+      const a = {
+        nickname: nickname || 'Main Address',
+        addressee: readSub(sub, 'addressee'),
+        addr1: readSub(sub, 'addr1'), addr2: readSub(sub, 'addr2'),
+        city: readSub(sub, 'city'), state: readSub(sub, 'state'),
+        zip: readSub(sub, 'zip'), country: readSub(sub, 'country'),
+        phone: readSub(sub, 'addrphone'),
+        sgln: readSub(sub, C.ADDR.sgln),
+        uuid: readSub(sub, C.ADDR.uuid),
+        line: (line === undefined ? null : line)
       };
+      return (!a.addr1 && !a.city && !a.zip) ? null : a;
+    };
+
+    /** A Location carries ONE `mainaddress` subrecord, not a sublist. */
+    const locationAddresses = (unit) => {
+      if (unit.addresses !== undefined) return unit.addresses;
+      unit.addresses = [];
+      try {
+        const rec = record.load({ type: 'location', id: unit.recordId, isDynamic: false });
+        const sub = rec.getSubrecord({ fieldId: 'mainaddress' });
+        const a = sub ? addrFromSub(sub, 'Main Address', null) : null;
+        if (a) unit.addresses = [a];
+      } catch (e) {
+        logIo.exception(C.MASTER.location, { type: 'location', id: unit.recordId }, e);
+      }
+      return unit.addresses;
+    };
+
+    /** Customer and Vendor carry an `addressbook` sublist — every line is a child. */
+    const entityAddresses = (unit) => {
+      if (unit.addresses !== undefined) return unit.addresses;
+      unit.addresses = [];
+      try {
+        const rec = record.load({
+          type: unit.recordType, id: unit.recordId,
+          isDynamic: false
+        });
+        const n = rec.getLineCount({ sublistId: 'addressbook' });
+        for (let i = 0; i < n; i++) {
+          const sub = rec.getSublistSubrecord({
+            sublistId: 'addressbook',
+            fieldId: 'addressbookaddress', line: i
+          });
+          // A nickname per line: N identically-named addresses is what the
+          // existing build produces, and it makes them impossible to tell apart.
+          let label = '';
+          try {
+            label = rec.getSublistValue({
+              sublistId: 'addressbook',
+              fieldId: 'label', line: i
+            }) || '';
+          }
+          catch (e) { /* no label field on this form */ }
+          const a = addrFromSub(sub, label || ('Address ' + (i + 1)), i);
+          if (a) unit.addresses.push(a);
+        }
+      } catch (e) {
+        logIo.exception(null, { type: unit.recordType, id: unit.recordId }, e);
+      }
+      return unit.addresses;
+    };
+
+    const readAddresses = (entry, unit) =>
+      entry.key === 'LOCATION' ? locationAddresses(unit) : entityAddresses(unit);
+
+    /**
+     * After the parent has an identifier, push its addresses — each its own call
+     * and its own work item, capped at max_inline.
+     */
+    const syncChildAddresses = (entry, unit, parentUuid, cfg, correlation, trigger) => {
+      const addrs = readAddresses(entry, unit);
+      if (!addrs.length) return;
+
+      const cap = Number(cfg.maxInline) || 5;
+      const parentName = textOf(unit.data.companyname) || textOf(unit.data.name) ||
+        textOf(unit.data.entityid);
+
       const addrEntry = {
         key: 'ADDRESS', syncType: C.SYNCTYPE.ADDRESS, builder: 'address',
         implemented: true, logSubjectField: entry.logSubjectField,
         fields: {}, endpoints: { create: entry.endpoints.child }
       };
 
-      const addrPayload = util.canonical(body);
-      const target = log.resolveLogTarget({
-        entry: addrEntry, unit: addrUnit, operation: C.OPERATION.CREATE,
-        payload: addrPayload, cfg: cfg
-      });
+      addrs.forEach((addr, i) => {
+        const addrUnit = Object.assign({
+          recordType: unit.recordType, recordId: unit.recordId, uomId: null,
+          storedUuid: addr.uuid || null, storedPayload: null, storedSynced: false, data: {}
+        }, unitFields({}));
 
-      const res = client.call({
-        entry: addrEntry, unit: addrUnit, cfg: cfg, target: target,
-        endpoint: entry.endpoints.child, pathParams: { uuid: parentUuid },
-        body: body, operation: C.OPERATION.CREATE, payload: addrPayload,
-        trigger: trigger, correlation: correlation, requestUuid: correlation
-      });
+        if (i >= cap) {
+          logIo.openDeferred({
+            entry: addrEntry, unit: addrUnit, cfg: cfg,
+            reason: C.REASON.PAYLOAD_CHANGED, correlation: correlation
+          });
+          return;
+        }
 
-      if (res.ok) {
-        log.closeSuccess(target, res);
-        writeAddressField(unit.recordId, C.ADDR.uuid, res.uuid || '');
-      } else if (!res.suppressed && !res.dryRun) {
-        log.closeFailure(target, res, cfg);
-        writeAddressField(unit.recordId, C.ADDR.error,
-          util.clip(res.errorMessage, 900));
-      }
+        const body = buildAddress(addr, cfg, parentName);
+        const addrPayload = util.canonical(body);
+
+        const target = logIo.resolveLogTarget({
+          entry: addrEntry, unit: addrUnit, operation: C.OPERATION.CREATE,
+          payload: addrPayload, cfg: cfg
+        });
+
+        const res = client.call({
+          entry: addrEntry, unit: addrUnit, cfg: cfg, target: target,
+          endpoint: entry.endpoints.child, pathParams: { uuid: parentUuid },
+          body: body, operation: C.OPERATION.CREATE, payload: addrPayload,
+          trigger: trigger, correlation: correlation, requestUuid: correlation
+        });
+
+        if (res.ok) {
+          logIo.closeSuccess(target, res);
+          writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
+            C.ADDR.uuid, res.uuid || '');
+        } else if (!res.suppressed && !res.dryRun) {
+          logIo.closeFailure(target, res, cfg);
+          writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
+            C.ADDR.error, util.clip(res.errorMessage, 900));
+        }
+      });
     };
 
     /**
-     * Write one field on the location's main address subrecord.
+     * Write one field on an address subrecord.
      *
      * This re-fires the User Event. That is safe and self-limiting: the second
      * pass rebuilds the same payload, the stored string matches, and it stamps
      * `No change` without calling out. The payload comparison IS the loop
      * breaker (§2.2).
      */
-    const writeAddressField = (locationId, fieldId, value) => {
+    const writeAddressField = (entry, recordType, recordId, line, fieldId, value) => {
       try {
-        const rec = record.load({ type: 'location', id: locationId, isDynamic: false });
-        const sub = rec.getSubrecord({ fieldId: 'mainaddress' });
+        const rec = record.load({ type: recordType, id: recordId, isDynamic: false });
+        const sub = (line === null || line === undefined)
+          ? rec.getSubrecord({ fieldId: 'mainaddress' })
+          : rec.getSublistSubrecord({
+            sublistId: 'addressbook',
+            fieldId: 'addressbookaddress', line: line
+          });
         if (!sub) return;
         sub.setValue({ fieldId: fieldId, value: value });
         rec.save({ ignoreMandatoryFields: true, enableSourcing: false });
       } catch (e) {
-        log.exception(C.MASTER.location, { type: 'location', id: locationId }, e);
+        logIo.exception(entry, { type: recordType, id: recordId }, e);
       }
     };
 
@@ -543,7 +941,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const map = {};
         const res = client.call({
           entry: {
-            key: 'STATES', syncType: C.SYNCTYPE.LOCATION, implemented: true,
+            key: 'STATES', syncType: C.SYNCTYPE.ADDRESS, implemented: true,
             fields: {}, endpoints: {}
           },
           unit: {
@@ -571,15 +969,18 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     // User Event helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** beforeLoad — our fields are ours. Disabled for every role. */
+    /** Fields a user legitimately edits. Everything else of ours is locked. */
+    const USER_OWNED = {
+      code: 1, isDefault: 1, sgln: 1, holdBin: 1, goodBin: 1, props: 1,
+      eligible: 1, dosage: 1, strength: 1, generic: 1, gln: 1,
+      item: 1, unit: 1, qty: 1, upc: 1, gtin: 1, ndc: 1,
+      gs1Prefix: 1, gs1Id: 1, packSize: 1
+    };
+
     const lockSyncFields = (form, entry) => {
       if (!form || !entry || !entry.fields) return;
       Object.keys(entry.fields).forEach((k) => {
-        // The business fields a user legitimately edits stay editable.
-        if (k === 'code' || k === 'isDefault' || k === 'sgln' ||
-          k === 'holdBin' || k === 'goodBin' || k === 'props' ||
-          k === 'eligible' || k === 'dosage' || k === 'strength' ||
-          k === 'generic' || k === 'gln') return;
+        if (USER_OWNED[k]) return;
         try {
           const fld = form.getField({ id: entry.fields[k] });
           if (fld) fld.updateDisplayType({ displayType: 'inline' });
@@ -590,55 +991,92 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     /** COPY — a copy has synced nothing. §11.9. */
     const clearAllSyncFields = (newRecord, entry) => {
       if (!newRecord || !entry || !entry.fields) return;
-      const clear = ['uuid', 'payload', 'synced', 'lastSync', 'lastTry', 'tryResult', 'error'];
-      clear.forEach((k) => {
-        const fid = entry.fields[k];
-        if (!fid) return;
-        try {
-          newRecord.setValue({ fieldId: fid, value: (k === 'synced') ? false : '' });
-        } catch (e) { /* not on the form */ }
-      });
+      ['uuid', 'payload', 'synced', 'lastSync', 'lastTry', 'tryResult', 'error', 'attention']
+        .forEach((k) => {
+          const fid = entry.fields[k];
+          if (!fid) return;
+          try {
+            newRecord.setValue({
+              fieldId: fid,
+              value: (k === 'synced' || k === 'attention') ? false : ''
+            });
+          } catch (e) { /* not on the form */ }
+        });
     };
 
-    /** beforeSubmit on DELETE — the UUID is unreadable once the record is gone. */
+    /**
+     * beforeSubmit on DELETE — the UUID is unreadable once the record is gone.
+     * An item caches every UOM row's UUID, because each row is its own product.
+     */
     const cacheForDelete = (oldRecord, entry) => {
-      if (!oldRecord || !entry || !entry.fields || !entry.fields.uuid) return;
+      if (!oldRecord || !entry) return;
+      const key = oldRecord.type + '|' + oldRecord.id;
+      const cached = { uuid: '', name: '', uomUuids: [] };
+
+      if (entry.fields && entry.fields.uuid) {
+        try { cached.uuid = oldRecord.getValue({ fieldId: entry.fields.uuid }) || ''; }
+        catch (e) { /* non-fatal */ }
+      }
       try {
-        DELETE_CACHE[oldRecord.type + '|' + oldRecord.id] = {
-          uuid: oldRecord.getValue({ fieldId: entry.fields.uuid }) || '',
-          name: oldRecord.getValue({ fieldId: 'name' }) || ''
-        };
-      } catch (e) { /* non-fatal */ }
+        cached.name = oldRecord.getValue({ fieldId: 'name' }) ||
+          oldRecord.getValue({ fieldId: 'itemid' }) || '';
+      }
+      catch (e) { /* non-fatal */ }
+
+      if (entry.key === 'ITEM') {
+        const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+        try {
+          search.create({
+            type: C.REC.UOM,
+            filters: [[U.item, 'anyof', oldRecord.id]],
+            columns: [U.uuid]
+          }).run().each((r) => {
+            const u = r.getValue(U.uuid);
+            if (u) cached.uomUuids.push(u);
+            return true;
+          });
+        } catch (e) { /* non-fatal */ }
+      }
+
+      DELETE_CACHE[key] = cached;
     };
 
     /** afterSubmit on DELETE — only when configured to, and only with a UUID. */
     const handleDelete = (entry, oldRecord, cfg) => {
       if (!entry.endpoints || !entry.endpoints.remove) return [];
-      const cached = DELETE_CACHE[oldRecord.type + '|' + oldRecord.id];
-      const uuid = cached && cached.uuid;
-      if (!uuid) return [];
       if (String(cfg.inactiveMethod).toUpperCase().indexOf('DELETE') === -1) return [];
 
-      const unit = {
-        recordType: oldRecord.type, recordId: oldRecord.id, uomId: null,
-        uuidField: null, payloadField: null, syncedField: null, lastSyncField: null,
-        lastTryField: null, tryResultField: null, errorField: null,
-        storedUuid: uuid, storedPayload: null, storedSynced: true, data: {}
-      };
-      const target = log.resolveLogTarget({
-        entry: entry, unit: unit,
-        operation: C.OPERATION.DELETE, payload: '', cfg: cfg
-      });
+      const cached = DELETE_CACHE[oldRecord.type + '|' + oldRecord.id] || {};
+      const uuids = entry.key === 'ITEM'
+        ? (cached.uomUuids || [])            // one product per UOM row
+        : (cached.uuid ? [cached.uuid] : []);
+      if (!uuids.length) return [];
 
-      const res = client.call({
-        entry: entry, unit: unit, cfg: cfg, target: target,
-        endpoint: entry.endpoints.remove, pathParams: { uuid: uuid },
-        body: null, operation: C.OPERATION.DELETE, trigger: C.TRIGGER.INITIAL
-      });
+      const correlation = util.uuid();
+      return uuids.map((uuid) => {
+        const unit = Object.assign({
+          recordType: oldRecord.type, recordId: oldRecord.id, uomId: null,
+          storedUuid: uuid, storedPayload: null, storedSynced: true, data: {}
+        }, unitFields({}));
 
-      if (res.ok) log.closeSuccess(target, res);
-      else if (!res.suppressed && !res.dryRun) log.closeFailure(target, res, cfg);
-      return [res];
+        const target = logIo.resolveLogTarget({
+          entry: entry, unit: unit,
+          operation: C.OPERATION.DELETE, payload: '', cfg: cfg
+        });
+
+        const res = client.call({
+          entry: entry, unit: unit, cfg: cfg, target: target,
+          endpoint: entry.endpoints.remove, pathParams: { uuid: uuid },
+          body: null, operation: C.OPERATION.DELETE, payload: '',
+          trigger: C.TRIGGER.INITIAL, correlation: correlation
+        });
+
+        // A 404 on a delete means it is already gone, which is the outcome asked
+        // for. Treat it as success rather than opening a work item nobody can close.
+        if (res.ok || res.httpStatus === 404) logIo.closeSuccess(target, res);
+        else if (!res.suppressed && !res.dryRun) logIo.closeFailure(target, res, cfg);
+        return res;
+      });
     };
 
     /**
@@ -666,14 +1104,62 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           'Exactly one row may be Active — deactivate the other first.');
     };
 
-    const validateUomRow = () => { /* §9.4 — UOM phase */ };
-    const validateItem = () => { /* §14.1 — Item phase */ };
+    /**
+     * §9.4 — one saleable unit per item, among ACTIVE rows only.
+     *
+     * Two active rows claiming the same unit means two Middleware products
+     * competing for one identity, and there is no way to tell afterwards which
+     * one the destination kept.
+     */
+    const validateUomRow = (ctx, entry) => {
+      const U = entry.fields;
+      const rec = ctx.newRecord;
+
+      if (util.truthy(rec.getValue({ fieldId: 'isinactive' }))) return;   // inactive: no claim
+
+      const itemId = rec.getValue({ fieldId: U.item });
+      const unitId = rec.getValue({ fieldId: U.unit });
+      if (util.blank(itemId) || util.blank(unitId)) return;
+
+      let clash = null;
+      try {
+        search.create({
+          type: C.REC.UOM,
+          filters: [[U.item, 'anyof', itemId], 'AND',
+          [U.unit, 'anyof', unitId], 'AND',
+          ['isinactive', 'is', 'F']],
+          columns: ['internalid', U.unit]
+        }).run().each((r) => {
+          if (String(r.getValue('internalid')) !== String(rec.id)) {
+            clash = r.getText(U.unit) || r.getValue(U.unit);
+            return false;
+          }
+          return true;
+        });
+      } catch (e) { return; }
+
+      if (clash)
+        throw new Error('This item already has an active UOM Detail row for "' + clash +
+          '". One saleable unit per item — inactivate the other row first.');
+    };
+
+    /**
+     * §14.1 — an eligible item must carry what the product payload needs. This
+     * warns rather than blocks: the item is legitimate NetSuite data, and making
+     * the integration an obstacle to trading is the wrong trade.
+     */
+    const validateItem = (ctx, entry) => {
+      // Deliberately empty of throws. The reconciliation page carries
+      // `Item has no UOM Detail`, which is where a data gap belongs.
+      return;
+    };
 
     return {
-      run, builders, resolveUnits, locationAddress,
+      run, builders, resolveUnits, rollUpItem,
       writeBackSuccess, writeBackFailure,
       lockSyncFields, clearAllSyncFields, cacheForDelete, handleDelete,
       validateConfig, validateUomRow, validateItem,
-      ensureParentLocation, resolveStateId
+      ensureParentLocation, resolveStateId, isEligible,
+      locationAddresses, entityAddresses
     };
   });

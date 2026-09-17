@@ -54,8 +54,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       if (!cfg.allowNonprod) {
         return {
           allowed: false, env: env,
-          reason: 'Non-production environment (' + env +
-            ') and allow_nonprod_calls is off'
+          reason: 'Non-production environment (' + env + ') and allow_nonprod_calls is off'
         };
       }
       if (cfg.envLabel === 'PRODUCTION') {
@@ -516,8 +515,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     const secureValue = (cfg) => {
       const secretId = String(cfg.secret || '');
       if (!secretId) throw new Error('No API Secret configured (custrecord_jj_rb_cf_secret)');
-      return https.createSecureString({ input: '{key}' })
-        .replaceAll({ input: '{key}', replacement: secretId });
+      // return https.createSecureString({ input: '{key}' })
+      //   .replaceAll({ input: '{key}', replacement: secretId });
+      return https.createSecureString({ input: `{${secretId}}` });
     };
 
     /** Map an HTTP status onto a retry policy. §17.3. */
@@ -602,7 +602,8 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         'Accept': 'application/json'
       };
       try {
-        headers[cfg.authHeader || 'Authorization'] = secureValue(cfg);
+        // headers[cfg.authHeader || 'Authorization'] = secureValue(cfg);
+        headers[cfg.authHeader || 'Authorization'] = String(cfg.secret || '');;
       } catch (e) {
         return closeCall(logRec, {
           outcome: C.OUTCOME.FAILURE,

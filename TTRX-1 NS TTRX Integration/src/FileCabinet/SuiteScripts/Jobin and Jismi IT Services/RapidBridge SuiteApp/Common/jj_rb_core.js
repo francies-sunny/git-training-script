@@ -283,7 +283,7 @@ define(['N/search'],
       },
 
       customrecord_jj_rb_uom_detail: {
-        key: 'UOM', syncType: SYNCTYPE.ITEM, builder: null, implemented: false,
+        key: 'UOM', syncType: SYNCTYPE.ITEM, builder: null, implemented: true,
         delegatesToParent: 'custrecord_jj_rb_uom_item', featureFlag: null,
         logSubjectField: LOG.uom,
         fields: {
@@ -307,7 +307,7 @@ define(['N/search'],
     /** Every item type shares one entry shape. Declared once, reused five times. */
     function itemEntry() {
       return {
-        key: 'ITEM', syncType: SYNCTYPE.ITEM, builder: 'item', implemented: false,
+        key: 'ITEM', syncType: SYNCTYPE.ITEM, builder: 'item', implemented: true,
         featureFlag: null, requiresEligibility: true, requiresUom: true,
         logSubjectField: LOG.item,
         fields: {
@@ -325,7 +325,7 @@ define(['N/search'],
     /** Customer and Vendor differ by one payload value. */
     function entityEntry(partnerType) {
       return {
-        key: partnerType, syncType: SYNCTYPE[partnerType], builder: 'entity', implemented: false,
+        key: partnerType, syncType: SYNCTYPE[partnerType], builder: 'entity', implemented: true,
         partnerType: partnerType, featureFlag: null, hasChildren: 'addressbook',
         logSubjectField: LOG.entity,
         fields: {
@@ -428,12 +428,36 @@ define(['N/search'],
       return String(a) === String(b);
     };
 
-    /** Form-urlencode, matching the Middleware's declared content type. */
+    /**
+     * Form-urlencode, matching the Middleware's declared content type.
+     *
+     * Nested values are JSON-stringified first. Without that step an array or an
+     * object encodes as the literal "[object Object]" — which the Middleware
+     * accepts with a 200 and stores as garbage.
+     */
     const formEncode = (obj) => Object.keys(obj)
       .filter((k) => obj[k] !== undefined && obj[k] !== null)
-      .map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(
-        typeof obj[k] === 'boolean' ? String(obj[k]) : obj[k]))
+      .map((k) => {
+        const v = obj[k];
+        const scalar = (typeof v === 'object') ? JSON.stringify(v)
+          : (typeof v === 'boolean') ? String(v) : v;
+        return encodeURIComponent(k) + '=' + encodeURIComponent(scalar);
+      })
       .join('&');
+
+    /**
+     * Values a builder wants INSIDE the comparison but NOT on the wire go under
+     * `__compare`. An entity's address set is the case this exists for: an
+     * address edit must move the parent's comparison, but the addresses are
+     * pushed as their own calls and must not ride the parent body.
+     */
+    const COMPARE_KEY = '__compare';
+    const stripCompare = (payload) => {
+      if (!payload || typeof payload !== 'object') return payload;
+      const out = {};
+      Object.keys(payload).forEach((k) => { if (k !== COMPARE_KEY) out[k] = payload[k]; });
+      return out;
+    };
 
     const encodeBody = (body, cfg) => {
       if (body === undefined || body === null) return undefined;
@@ -486,7 +510,7 @@ define(['N/search'],
     };
 
     const util = {
-      uuid, canonical, samePayload, formEncode, encodeBody,
+      uuid, canonical, samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
       clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged
     };
 

@@ -5,16 +5,17 @@
  *
  * jj_rb_ue_master — the ONE master-data User Event.
  *
- * PHASE 1 DEPLOYMENTS (3):
+ * DEPLOYMENTS (12):
  *   customrecord_jj_rb_dosage_form
  *   location
+ *   customer · vendor
+ *   inventoryitem · lotnumberedinventoryitem · serializedinventoryitem ·
+ *   assemblyitem · kititem
+ *   customrecord_jj_rb_uom_detail    ← delegates to its parent item, that row only
  *   customrecord_jj_rb_config        ← validator only, never syncs
  *
- * LATER, with no change to this file — one C.MASTER entry, one builder,
- * one deployment each:
- *   inventoryitem, lotnumberedinventoryitem, serializedinventoryitem,
- *   assemblyitem, kititem, customer, vendor, bin,
- *   customrecord_jj_rb_uom_detail
+ * NOT DEPLOYED YET: bin. It is declared in C.MASTER with implemented:false and
+ * fails loudly if deployed, rather than quietly doing nothing.
  *
  * It knows nothing about any of them. Everything comes from C.MASTER[type].
  *
@@ -24,7 +25,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
   (runtime, core, io, sync) => {
 
     const { C, util, config } = core;
-    const { log } = io;
+    const { logIo } = io;
 
     const entryFor = (t) => C.MASTER[String(t).toLowerCase()] || null;
 
@@ -41,7 +42,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         if (ctx.type === ctx.UserEventType.COPY)
           sync.clearAllSyncFields(ctx.newRecord, entry);
       } catch (e) {
-        log.exception(null, ctx && ctx.newRecord, e);
+        logIo.exception(null, ctx && ctx.newRecord, e);
       }
     };
 
@@ -77,7 +78,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         if (entry.key === 'ITEM') sync.validateItem(ctx, entry);
 
       } catch (e) {
-        log.exception(entry, ctx.newRecord, e);
+        logIo.exception(entry, ctx.newRecord, e);
       }
     };
 
@@ -121,7 +122,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
 
       } catch (e) {
         // NEVER re-throw in afterSubmit: the record is already committed.
-        log.exception(entry, ctx.newRecord, e);
+        logIo.exception(entry, ctx.newRecord, e);
       }
     };
 
@@ -137,7 +138,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
     const stampFeatureSkip = (entry, rec) => {
       const f = entry.fields || {};
       if (!f.lastTry || !f.tryResult) return;
-      log.stampTry({
+      logIo.stampTry({
         recordType: rec.type, recordId: rec.id,
         lastTryField: f.lastTry, tryResultField: f.tryResult
       }, C.TRY.SKIP_FEATURE);

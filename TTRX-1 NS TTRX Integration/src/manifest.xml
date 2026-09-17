@@ -28,6 +28,7 @@
       <feature required="false">PAYABLES</feature>
       <feature required="false">TIMETRACKING</feature>
       <feature required="false">WEBSERVICES</feature>
+      <feature required="true">SERVERSIDESCRIPTING</feature>
     </features>
   </dependencies>
 </manifest>

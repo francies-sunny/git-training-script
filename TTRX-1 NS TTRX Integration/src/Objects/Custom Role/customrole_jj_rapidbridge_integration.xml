@@ -104,25 +104,5 @@
       <permkey>ADMI_MANAGE_OAUTH2</permkey>
       <permlevel>FULL</permlevel>
     </permission>
-    <permission>
-      <permkey>[scriptid=customrecord_jj_rb_config]</permkey>
-      <permlevel>EDIT</permlevel>
-      <restriction></restriction>
-    </permission>
-    <permission>
-      <permkey>[scriptid=customrecord_jj_rb_dosage_form]</permkey>
-      <permlevel>EDIT</permlevel>
-      <restriction></restriction>
-    </permission>
-    <permission>
-      <permkey>[scriptid=customrecord_jj_rb_sync_log]</permkey>
-      <permlevel>EDIT</permlevel>
-      <restriction></restriction>
-    </permission>
-    <permission>
-      <permkey>[scriptid=customrecord_jj_rb_uom_detail]</permkey>
-      <permlevel>EDIT</permlevel>
-      <restriction></restriction>
-    </permission>
   </permissions>
 </role>

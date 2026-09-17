@@ -9,7 +9,8 @@
  * re-sync, and a Mass Update offered on a Sales Order list is an invitation to
  * do the thing the scope says is not built — Transaction Guide §1.5.4.
  *
- * PHASE 1: customrecord_jj_rb_dosage_form, location.
+ * DEPLOY TO: customrecord_jj_rb_dosage_form · location · customer · vendor ·
+ * the five item types · customrecord_jj_rb_uom_detail.
  *
  * What "force" means: CLEAR THE STORED PAYLOAD, then run the engine. The
  * stored payload is the trigger (§2.2), so clearing it is the whole mechanism
@@ -20,11 +21,11 @@
  *
  * §7.12.
  */
-define(['N/record', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
-  (record, core, io, sync) => {
+define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
+  (record, search, core, io, sync) => {
 
     const { C, util, config } = core;
-    const { log } = io;
+    const { logIo } = io;
 
     const each = (params) => {
       const recordType = params.type;
@@ -36,7 +37,7 @@ define(['N/record', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
       try {
         const cfg = config.get();
         if (!cfg) {
-          log.exception(entry, { type: recordType, id: recordId },
+          logIo.exception(entry, { type: recordType, id: recordId },
             new Error('No active RapidBridge configuration — nothing was re-synced.'));
           return;
         }
@@ -44,7 +45,7 @@ define(['N/record', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
         if (entry.featureFlag && cfg[flagKey(entry.featureFlag)] !== true) {
           const f = entry.fields || {};
           if (f.lastTry && f.tryResult)
-            log.stampTry({
+            logIo.stampTry({
               recordType: recordType, recordId: recordId,
               lastTryField: f.lastTry, tryResultField: f.tryResult
             },
@@ -53,7 +54,12 @@ define(['N/record', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
         }
 
         // Clear the stored payload — and ONLY that. This is the force.
-        if (entry.fields && entry.fields.payload) {
+        //
+        // An ITEM has no stored payload of its own: the payloads live on its UOM
+        // Detail rows, one per Middleware product. Clearing the item would clear
+        // nothing, so clear the rows.
+        if (entry.key === 'ITEM') clearItemPayloads(recordId);
+        else if (entry.fields && entry.fields.payload) {
           record.submitFields({
             type: recordType, id: recordId,
             values: { [entry.fields.payload]: '' },
@@ -68,8 +74,30 @@ define(['N/record', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
 
       } catch (e) {
         // A Mass Update must not abandon the remaining rows because one failed.
-        log.exception(entry, { type: recordType, id: recordId }, e);
+        logIo.exception(entry, { type: recordType, id: recordId }, e);
       }
+    };
+
+    /** Every active UOM row of this item forgets what it last sent. */
+    const clearItemPayloads = (itemId) => {
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      const ids = [];
+      try {
+        search.create({
+          type: C.REC.UOM,
+          filters: [[U.item, 'anyof', itemId], 'AND', ['isinactive', 'is', 'F']],
+          columns: ['internalid']
+        }).run().each((r) => { ids.push(r.getValue('internalid')); return true; });
+      } catch (e) { return; }
+
+      ids.forEach((id) => {
+        try {
+          record.submitFields({
+            type: C.REC.UOM, id: id, values: { [U.payload]: '' },
+            options: { ignoreMandatoryFields: true }
+          });
+        } catch (e) { /* the engine will still evaluate it */ }
+      });
     };
 
     const flagKey = (fieldId) => {
