@@ -60,7 +60,11 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
 
       // The one save the SuiteApp refuses — a second Active configuration row.
       // Deliberately outside the try/catch: it MUST be able to throw.
-      if (entry.key === 'CONFIG') return sync.validateConfig(ctx);
+      //
+      // Called, NOT returned. A User Event entry point must resolve to
+      // undefined; NetSuite serialises whatever comes back and a non-trivial
+      // value surfaces to the user as "An unexpected error has occurred".
+      if (entry.key === 'CONFIG') { sync.validateConfig(ctx); return; }
 
       try {
         if (ctx.type === ctx.UserEventType.DELETE) {
@@ -101,7 +105,18 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         if (ctx.type === ctx.UserEventType.DELETE) {
           if (!cfg) return;
           log.debug('Master UE - processing delete', { recordType: ctx.oldRecord.type, recordId: ctx.oldRecord.id, entry: entry.key });
-          return sync.handleDelete(entry, ctx.oldRecord, cfg);
+
+          // Call it, do not return it. handleDelete returns one call-result
+          // object per unit; returning that array out of afterSubmit is what
+          // produced "An unexpected error has occurred" — NetSuite serialises
+          // an entry point's return value, and these objects are not meant to
+          // leave the script. Every entry point here resolves to undefined.
+          const result = sync.handleDelete(entry, ctx.oldRecord, cfg);
+          log.debug('Master UE - delete handled', {
+            units: (result && result.length) || 0,
+            ok: (result || []).filter(function (r) { return r && r.ok; }).length
+          });
+          return;
         }
 
         // ── P4. GUARD 1 — free. Our own write-back changes only sync-control
@@ -133,7 +148,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         });
 
         log.debug('Master UE - sync completed', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, entry: entry.key });
-
+        log.debug('Governance remaining after sync', { governance: runtime.getCurrentScript().getRemainingUsage() });
       } catch (e) {
         // NEVER re-throw in afterSubmit: the record is already committed.
         logIo.exception(entry, ctx.newRecord, e);
@@ -161,10 +176,13 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         C.STATUS.CLOSED_CANCELLED);
 
       if (!f.lastTry || !f.tryResult) return;
+      // errorField is passed so the stamp can CLEAR any error left by an
+      // earlier evaluation: the feature being off is not a fault of the record.
       logIo.stampTry({
         recordType: rec.type, recordId: rec.id,
-        lastTryField: f.lastTry, tryResultField: f.tryResult
-      }, C.TRY.SKIP_FEATURE);
+        lastTryField: f.lastTry, tryResultField: f.tryResult,
+        errorField: f.error || null
+      }, C.TRY.SKIP_FEATURE, null, '');
 
       log.debug('Master UE - feature skip stamped', { recordType: rec.type, recordId: rec.id, entry: entry.key, result: C.TRY.SKIP_FEATURE });
     };

@@ -199,9 +199,31 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       if (unit.storedUuid) v[L.uuid] = unit.storedUuid;
       if (cfg && cfg.id) v[L.config] = cfg.id;
       if (cfg && cfg.subsidiary) v[L.subsidiary] = cfg.subsidiary;
-      // Point the typed subject field at the record this work item is about.
-      if (entry.logSubjectField) v[entry.logSubjectField] = unit.recordId;
-      if (unit.uomId) v[L.uom] = unit.uomId;
+      // Typed subject references (Dosage Form, Location, Entity, Item, UOM,
+      // Bin) are List/Record fields, and NetSuite validates them on save. Once
+      // the record is DELETED its internal id is no longer a valid value:
+      //
+      //   INVALID_FLD_VALUE — You have entered an Invalid Field Value 5 for
+      //   the following field: custrecord_jj_rb_sl_dosage
+      //
+      // and the whole log row is lost — the one row that existed to record the
+      // delete. A try/catch around setValue does not help: the value is
+      // accepted when set and rejected at save().
+      //
+      // After a delete the identity lives in the two TEXT fields, Record Type
+      // and NetSuite Internal ID. Nothing validates those against a record, so
+      // they keep working, and together they are the key every log lookup
+      // already uses.
+      //
+      // For an ITEM the unit IS the UOM Detail row, so recordId is the row —
+      // the Item field has to take itemId, or a log row can never be traced
+      // back to its item.
+      if (!unit.subjectDeleted) {
+        if (entry.logSubjectField)
+          v[entry.logSubjectField] = unit.itemId || unit.recordId;
+        if (unit.itemId) v[L.item] = unit.itemId;
+        if (unit.uomId) v[L.uom] = unit.uomId;
+      }
       return v;
     };
 
@@ -629,6 +651,48 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       } catch (e) { log.error({ title: 'RB closeFailure', details: e }); }
     };
 
+    /**
+     * A failure that no retry can cure, so it goes straight to a human.
+     *
+     * A failed DELETE is the case this exists for. `closeFailure` schedules a
+     * back-off and waits for the retry sweep — but the sweep rebuilds a payload
+     * from the MASTER RECORD, and for a delete that record no longer exists.
+     * The work item would back off for ever and never be picked up, while the
+     * Middleware quietly keeps an object NetSuite has thrown away.
+     *
+     * So: Open - Needs Review, retry exhausted, with a plain-language
+     * instruction in Suggested Action.
+     */
+    const closeNeedsReview = (target, res, note, suggested) => {
+      const mainId = target.mode === 'MAIN' ? res.logId : target.parentId;
+      try {
+        record.submitFields({
+          type: C.REC.LOG, id: mainId, values: {
+            [L.status]: lid(C.LIST.syncStatus, C.STATUS.OPEN_REVIEW),
+            [L.open]: true,
+            [L.success]: false,
+            [L.lastAt]: new Date(),
+            [L.notBefore]: '',
+            [L.exhausted]: true,
+            [L.errorClass]: lid(C.LIST.errorClass, res.errorClass || C.ERRCLASS.POISON),
+            [L.errorCode]: util.clip(res.errorCode || '', 60),
+            [L.error]: util.clip(note || res.errorMessage || '', 3900),
+            [L.reason]: lid(C.LIST.reconReason, C.REASON.AWAITING_DECISION),
+            [L.reconStatus]: lid(C.LIST.reconStatus, 'Open'),
+            [L.suggested]: util.clip(suggested || '', 3900)
+          }, options: { ignoreMandatoryFields: true }
+        });
+        log.audit({
+          title: 'RB work item needs review ' + mainId,
+          details: {
+            closedBy: res.logId, role: target.mode,
+            httpStatus: res.httpStatus, errorCode: res.errorCode || null,
+            note: note
+          }
+        });
+      } catch (e) { log.error({ title: 'RB closeNeedsReview', details: e }); }
+    };
+
     /** Exponential back-off with a ceiling. */
     const backoff = (attempts, cfg) => {
       const base = Number(cfg && cfg.retryBase) || 60;
@@ -741,16 +805,32 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
      *
      * These fields are in SYNC_CONTROL_FIELDS, so stamping never re-triggers.
      */
-    const stampTry = (unit, result, extra) => {
+    const stampTry = (unit, result, extra, errorText) => {
       if (!unit || !unit.recordId || !unit.tryResultField) return;
       const values = {};
       values[unit.lastTryField] = new Date();
       values[unit.tryResultField] = lid(C.LIST.tryResult, result);
       if (extra) Object.assign(values, extra);
 
+      // The Last Error field on the MASTER record. Until now only an API
+      // failure ever wrote it, so a record blocked before the call — a blank
+      // Dosage Form code, a missing parent, no UOM row — showed a try result
+      // of "Failed" with no explanation anywhere the user was looking. The
+      // reason went only to the Sync Log.
+      //
+      //   undefined  leave the field alone (the outcome says nothing about it)
+      //   ''         clear it (this evaluation resolved whatever was wrong)
+      //   text       set it (this evaluation is why the record cannot sync)
+      if (errorText !== undefined && unit.errorField)
+        values[unit.errorField] = errorText ? util.clip(String(errorText), 3900) : '';
+
       log.debug({
         title: 'RB stampTry ' + unit.recordType + '/' + unit.recordId,
-        details: { result: result, uomId: unit.uomId || null }
+        details: {
+          result: result, uomId: unit.uomId || null,
+          errorField: unit.errorField || null,
+          error: errorText === undefined ? '(unchanged)' : (errorText || '(cleared)')
+        }
       });
 
       try {
@@ -767,12 +847,74 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     };
 
     /** afterSubmit must never re-throw — the record is already committed. */
-    const exception = (entry, rec, e) => {
+    const exception = (entry, rec, e, o) => {
+      const message = (e && e.message) || String(e);
+
+      // The execution log first, and unconditionally: whatever happens below,
+      // the stack must survive.
       log.error({
         title: 'RB exception — ' + (entry && entry.key) + ' ' +
           (rec && rec.type) + '/' + (rec && rec.id),
-        details: (e && e.stack) || (e && e.message) || String(e)
+        details: (e && e.stack) || message
       });
+
+      // Then a work item, because an exception only in the execution log is an
+      // exception nobody is ever going to fix. It is opened as Needs Review:
+      // an exception is by definition not something a retry will cure.
+      //
+      // Skipped when there is no dispatch entry (the beforeLoad catch, where
+      // even the record type is unknown) or when the caller opts out.
+      if (!entry || !rec || !rec.id || (o && o.silent === true)) return;
+
+      // Put it on the master record as well, when the record still exists.
+      // A user looking at the record they just saved should not have to open
+      // the Sync Log to find out that something threw.
+      if (!(o && o.subjectDeleted) && entry.fields && entry.fields.error) {
+        try {
+          const v = {};
+          v[entry.fields.error] = util.clip(message, 3900);
+          if (entry.fields.lastTry) v[entry.fields.lastTry] = new Date();
+          if (entry.fields.tryResult)
+            v[entry.fields.tryResult] = lid(C.LIST.tryResult, C.TRY.FAIL_PRE_API);
+          if (entry.fields.synced) v[entry.fields.synced] = false;
+          record.submitFields({
+            type: rec.type, id: rec.id, values: v,
+            options: { ignoreMandatoryFields: true }
+          });
+        } catch (inner) {
+          log.error({ title: 'RB exception could not stamp the record', details: inner });
+        }
+      }
+
+      try {
+        recordNoCall({
+          entry: entry,
+          unit: {
+            recordType: rec.type, recordId: rec.id,
+            uomId: (o && o.uomId) || null, itemId: (o && o.itemId) || null,
+            storedUuid: (o && o.uuid) || null,
+            // Set by the delete path: the record is gone, so the typed subject
+            // reference fields must be left blank or the row cannot be saved.
+            subjectDeleted: !!(o && o.subjectDeleted)
+          },
+          cfg: (o && o.cfg) || config.get(),
+          operation: (o && o.operation) || C.OPERATION.UPDATE,
+          status: C.STATUS.OPEN_REVIEW,
+          outcome: C.OUTCOME.FAILURE,
+          errorClass: C.ERRCLASS.POISON,
+          errorCode: (o && o.errorCode) || 'EXCEPTION',
+          trigger: (o && o.trigger) || C.TRIGGER.INITIAL,
+          reason: C.REASON.AWAITING_DECISION,
+          correlation: (o && o.correlation) || null,
+          note: (o && o.note ? o.note + ' ' : '') + message,
+          suggested: (o && o.suggested) ||
+            'The SuiteApp threw while handling this record. Read the execution ' +
+            'log entry for the full stack, fix the cause, then re-save the ' +
+            'record (or use Mass Update: Re-sync) to clear this work item.'
+        });
+      } catch (inner) {
+        log.error({ title: 'RB exception could not open a work item', details: inner });
+      }
     };
 
     /** §12.6 — keep the latest open main record, close the rest as Merged. */
@@ -935,10 +1077,140 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       }
     };
 
+    /**
+     * Every UUID the Middleware ever accepted for this item, one per UOM row,
+     * newest first.
+     *
+     * Needed because `custrecord_jj_rb_uom_item` is declared
+     * `onparentdelete = SET_NULL`: deleting an item does not delete its UOM
+     * Detail rows, it NULLS their item link. By the time afterSubmit runs there
+     * is no way left to search from the item to its rows. The Sync Log is the
+     * only place that still knows which products belonged to it.
+     *
+     * @returns {Array<{uomId:string|null, uuid:string}>}
+     */
+    const syncedUnitUuids = (entry, itemId) => {
+      const out = [];
+      const seen = {};
+      if (!itemId) return out;
+      try {
+        // ONE log record type serves every master-data sync, so an internal id
+        // alone is ambiguous — id 42 is a different thing for each record type.
+        // Record type and Sync Type are part of the key, always.
+        const filters = [
+          [L.recType, 'is', String(C.REC.UOM)], 'AND',
+          [L.item,    'anyof', itemId],         'AND',
+          [L.success, 'is', 'T'],               'AND',
+          [L.uuid,    'isnotempty', '']
+        ];
+        if (entry && entry.syncType) {
+          const typeId = lid(C.LIST.syncType, entry.syncType);
+          if (typeId) filters.push('AND', [L.type, 'anyof', typeId]);
+        }
+
+        search.create({
+          type: C.REC.LOG,
+          filters: filters,
+          columns: [
+            search.createColumn({ name: 'internalid', sort: search.Sort.DESC }),
+            L.uom, L.uuid
+          ]
+        }).run().each((r) => {
+          const uomId = String(r.getValue(L.uom) || '');
+          const uuid = String(r.getValue(L.uuid) || '');
+          const key = uomId || uuid;
+          if (!uuid || seen[key]) return true;          // newest per row wins
+          seen[key] = true;
+          out.push({ uomId: uomId || null, uuid: uuid });
+          return true;
+        });
+      } catch (e) {
+        log.error({ title: 'RB syncedUnitUuids item ' + itemId, details: e });
+      }
+      log.debug({
+        title: 'RB syncedUnitUuids item ' + itemId,
+        details: { found: out.length, units: out }
+      });
+      return out;
+    };
+
+    /**
+     * A log row for something that happened with NO call and NO master record
+     * left to stamp.
+     *
+     * A delete is the case that needs it. Once the record is gone `stampTry`
+     * has nowhere to write, so the Sync Log is the ONLY place the decision can
+     * be recorded — and "we deleted a record and deliberately sent nothing" is
+     * exactly the kind of decision that has to be recorded.
+     *
+     * Unlike openDeferred this does not join an open work item and does not
+     * have to leave the row open.
+     */
+    const recordNoCall = (o) => {
+      const { entry, unit, cfg } = o;
+      const status = o.status || C.STATUS.CLOSED_NO_ACTION;
+      const isOpen = String(status).indexOf('Open') === 0;
+      try {
+        const rec = record.create({ type: C.REC.LOG });
+        const v = subjectValues(entry, unit, cfg, o.operation || C.OPERATION.UPDATE);
+        v[L.ref] = makeRef(entry, unit);
+        v[L.correlation] = o.correlation || util.uuid();
+        v[L.role] = lid(C.LIST.logRole, C.ROLE.PARENT);
+        v[L.attemptNo] = 0;
+        v[L.attempts] = 0;
+        v[L.status] = lid(C.LIST.syncStatus, status);
+        v[L.outcome] = lid(C.LIST.outcome, o.outcome || C.OUTCOME.SKIPPED);
+        v[L.open] = isOpen;
+        v[L.success] = false;
+        v[L.trigger] = lid(C.LIST.trigger, o.trigger || C.TRIGGER.INITIAL);
+        v[L.started] = new Date();
+        v[L.completed] = new Date();
+        v[L.duration] = 0;
+        v[L.firstAt] = new Date();
+        v[L.lastAt] = new Date();
+        v[L.context] = String(runtime.executionContext);
+        if (o.payload) v[L.payload] = util.clip(o.payload, 100000);
+        if (o.reason) v[L.reason] = lid(C.LIST.reconReason, o.reason);
+        if (o.errorClass) v[L.errorClass] = lid(C.LIST.errorClass, o.errorClass);
+        if (o.errorCode) v[L.errorCode] = util.clip(o.errorCode, 60);
+        if (o.suggested) v[L.suggested] = util.clip(o.suggested, 3900);
+        if (o.uuid || (unit && unit.storedUuid))
+          v[L.uuid] = o.uuid || unit.storedUuid;
+        if (o.exhausted) v[L.exhausted] = true;
+        v[L.reconStatus] = lid(C.LIST.reconStatus, isOpen ? 'Open' : 'Resolved');
+        if (!isOpen) v[L.resolvedOn] = new Date();
+        if (o.note) {
+          v[L.error] = util.clip(o.note, 3900);
+          if (!isOpen) v[L.resolution] = util.clip(o.note, 3900);
+        }
+
+        Object.keys(v).forEach((f) => {
+          if (v[f] !== null && v[f] !== undefined) {
+            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+          }
+        });
+
+        const id = rec.save({ ignoreMandatoryFields: true });
+        log.debug({
+          title: 'RB recordNoCall ' + id,
+          details: {
+            recordType: unit.recordType, recordId: unit.recordId,
+            uomId: unit.uomId || null, operation: o.operation,
+            status: status, outcome: o.outcome || C.OUTCOME.SKIPPED, note: o.note
+          }
+        });
+        return id;
+      } catch (e) {
+        log.error({ title: 'RB recordNoCall', details: e });
+        return null;
+      }
+    };
+
     const logApi = {
       resolveLogTarget, openCall, closeCall, closeSuccess, closeFailure,
       openDeferred, stampTry, exception, mergeDuplicates, lastSuccess,
-      findOpenMain, closeStaleWorkItem, closeNoAction, parkUnsent
+      findOpenMain, closeStaleWorkItem, closeNoAction, parkUnsent,
+      syncedUnitUuids, recordNoCall, closeNeedsReview
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1000,6 +1272,10 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
      * `false`, so no caller can read `.code` off a boolean.
      */
     const call = (o) => {
+      log.debug("In call() for " + o.endpoint.method + " " + o.endpoint.path, {
+        pathParams: o.pathParams, payload: o.payload, request: o.body,
+        correlation: o.correlation, requestUuid: o.requestUuid
+      });
       const cfg = o.cfg;
 
       // ── The gate comes first. Before the timeout, before redaction, before
@@ -1097,21 +1373,22 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           timeout: (Number(cfg.timeout) || 8) * 1000
         });
 
-        // let testApiResponse = 'success';
+        let testApiResponse = 'success';
 
-        // if (testApiResponse === 'success') {
-        //   res = { code: 200, body: JSON.stringify({ success: true, uuid: 'TEST-UUID-00000001' }) };
-        // } else if (testApiResponse === 'error') {
-        //   res = { code: 500, body: JSON.stringify({ success: false }) };
-        // }
+        if (testApiResponse === 'success') {
+          res = { code: 200, body: JSON.stringify({ success: true, uuid: 'TEST-UUID-00000001' }) };
+        } else if (testApiResponse === 'error') {
+          res = { code: 500, body: JSON.stringify({ success: false }) };
+        }
 
-        res = https.request({
-          method: o.endpoint.method,
-          url: url,
-          headers: headers,
-          body: noBody ? undefined : util.encodeBody(o.body, cfg),
-          timeout: (Number(cfg.timeout) || 8) * 1000        // ALWAYS set
-        });
+        // res = https.request({
+        //   method: o.endpoint.method,
+        //   url: url,
+        //   headers: headers,
+        //   body: noBody ? undefined : util.encodeBody(o.body, cfg),
+        //   timeout: (Number(cfg.timeout) || 8) * 1000        // ALWAYS set
+        // });
+        log.debug("Response", { code: res.code, body: res.body });
       } catch (e) { thrown = e; }
 
       const ms = Date.now() - started;
@@ -1140,6 +1417,8 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         closed.errorCode = 'HTTP_' + status;
         closed.errorMessage = messageFrom(parsed, res.body);
       }
+
+      log.debug("Call closed", { logRec, closed });
 
       const result = closeCall(logRec, closed);
       result.body = parsed;

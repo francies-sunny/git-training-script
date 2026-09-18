@@ -606,7 +606,11 @@ define(['N/search'],
           row.allowNonprod = util.truthy(row.allowNonprod);
           row.envLabel = row.envLabelText || 'PRODUCTION';
           row.contentType = row.contentTypeText || 'application/x-www-form-urlencoded';
-          row.inactiveMethod = row.inactiveMethodText || 'UPDATE';
+          // TEXT field, not a list: getText() returns null for a free-form
+          // column, so reading the *Text alias meant the configured value
+          // (PUT_IS_ACTIVE_FALSE / DELETE) was never seen and every account
+          // silently behaved as the default.
+          row.inactiveMethod = String(row.inactiveMethod || row.inactiveMethodText || 'PUT_IS_ACTIVE_FALSE').toUpperCase();
           CFG_CACHE = row;
         });
       } catch (e) {

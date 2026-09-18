@@ -429,18 +429,19 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (entry.key === 'UOM') return runUomRow(recordId, cfg, trigger, correlation);
 
       if (entry.implemented === false || !builders[entry.builder]) {
+        const msg = 'No builder for "' + entry.builder + '". ' + entry.key +
+          ' is declared in the dispatch table but not implemented in ' +
+          'this phase. Remove the deployment or add the builder.';
         const u = resolveUnits(entry, recordId, recordType, cfg, o);
-        if (u.list.length) logIo.stampTry(u.list[0], C.TRY.FAIL_PRE_API);
-        logIo.exception(entry, { type: recordType, id: recordId },
-          new Error('No builder for "' + entry.builder + '". ' + entry.key +
-            ' is declared in the dispatch table but not implemented in ' +
-            'this phase. Remove the deployment or add the builder.'));
+        if (u.list.length) logIo.stampTry(u.list[0], C.TRY.FAIL_PRE_API, null, msg);
+        logIo.exception(entry, { type: recordType, id: recordId }, new Error(msg));
         return [{ ok: false, notImplemented: true }];
       }
 
       // §8.1 — eligibility, the first gate. An ineligible item is not an error.
       if (entry.requiresEligibility && !isEligible(entry, recordId, recordType, cfg)) {
-        logIo.stampTry(itemStampUnit(entry, recordId, recordType), C.TRY.SKIP_INELIGIBLE);
+        logIo.stampTry(itemStampUnit(entry, recordId, recordType),
+          C.TRY.SKIP_INELIGIBLE, null, '');
         return [{ skipped: true, reason: 'not eligible' }];
       }
 
@@ -460,7 +461,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             trigger: trigger, note: units.blocked,
             correlation: correlation
           });
-          logIo.stampTry(stampUnit, units.blockedTry);
+          logIo.stampTry(stampUnit, units.blockedTry, null, units.blocked);
         } else {
           logIo.exception(entry, { type: recordType, id: recordId }, new Error(units.blocked));
         }
@@ -513,7 +514,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               'Closed without a call: this record is no longer eligible to ' +
               'sync (' + gate.reason + ').');
           }
-          logIo.stampTry(unit, gate.tryResult);
+          // A gate that needs a person says so ON THE RECORD. A routine skip
+          // clears any error left over from an earlier evaluation.
+          logIo.stampTry(unit, gate.tryResult, null,
+            gate.needsHuman ? (gate.note || gate.reason) : '');
           results.push({ skipped: true, reason: gate.reason });
           return;
         }
@@ -534,7 +538,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
                   ' has no Middleware UUID yet.',
                 correlation: correlation
               });
-              logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT);
+              logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT, null,
+                'The parent location (' + textOf(unit.data.parent) + ') has no ' +
+                'Middleware UUID yet, so this location cannot name its parent. ' +
+                'Sync the parent location first.');
               results.push({ ok: false, blocked: 'parent location not synced' });
               return;
             }
@@ -563,7 +570,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             'Closed without a call: the record now matches the payload the ' +
             'Middleware last accepted, so the change this work item was ' +
             'opened for no longer exists.');
-          logIo.stampTry(unit, C.TRY.NO_CHANGE);
+          logIo.stampTry(unit, C.TRY.NO_CHANGE, null, '');
           results.push({ skipped: true, noChange: true });
           return;
         }
@@ -633,6 +640,24 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         const operation = operationFor(unit, payload);
 
+        // Inactivate Method = DELETE: express the inactivation as a remote
+        // delete instead of an update. Falls back to the update when this sync
+        // type has no delete endpoint, rather than silently doing nothing.
+        if (operation === C.OPERATION.INACTIVATE && deleteOnInactivate(cfg)) {
+          if (entry.endpoints && entry.endpoints.remove) {
+            results.push(inactivateByDelete(entry, unit, cfg, trigger, correlation));
+            return;
+          }
+          log.audit({
+            title: 'RB Inactivate Method is DELETE but ' + entry.key +
+              ' has no delete endpoint',
+            details: {
+              recordType: unit.recordType, recordId: unit.recordId,
+              fallingBackTo: 'PUT is_active:false'
+            }
+          });
+        }
+
         log.debug({
           title: 'RB calling ' + operation + ' ' + unit.recordType + '/' + unit.recordId,
           details: {
@@ -680,7 +705,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           // stays open on purpose — but parked, not "retrying".
           logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
             res.errorMessage || 'Kill switch is on; no call was made.');
-          logIo.stampTry(unit, C.TRY.FAIL_PRE_API);
+          logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null,
+            res.errorMessage || 'Kill switch is on; no call was made.');
           results.push({ ok: false, skipped: true });
 
         } else {
@@ -797,6 +823,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               'is blank. Nothing can be sent until it is filled in.'
           };
       }
+      // Inactivate Method = DELETE, record inactive, no UUID: the remote
+      // object was deliberately deleted by that policy. Creating it again on
+      // the next save would undo the inactivation every time the record is
+      // touched. This has to be checked BEFORE sync_inactive, because it
+      // applies whichever way that flag is set.
+      if (util.truthy(unit.data.isinactive) && !unit.storedUuid && deleteOnInactivate(cfg))
+        return {
+          tryResult: C.TRY.SKIP_INELIGIBLE,
+          reason: 'inactive; the remote object was deleted by Inactivate Method policy'
+        };
+
       if (util.truthy(unit.data.isinactive) && cfg.syncInactive === false && !unit.storedUuid)
         return { tryResult: C.TRY.SKIP_INELIGIBLE, reason: 'inactive, never synced' };
       return null;
@@ -825,6 +862,116 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (was && !now) return C.OPERATION.INACTIVATE;
       if (!was && now) return C.OPERATION.REACTIVATE;
       return C.OPERATION.UPDATE;
+    };
+
+    /**
+     * §18 q2 — `Inactivate Method` on the configuration decides HOW an
+     * inactivation reaches the Middleware. It is a TEXT field:
+     *
+     *   PUT_IS_ACTIVE_FALSE (default) — the ordinary update carries
+     *     is_active:false. The remote object survives and keeps its UUID, so a
+     *     later reactivation is another update.
+     *
+     *   DELETE — the remote object is REMOVED. The UUID must then be cleared
+     *     locally, or a later reactivation would PUT to a UUID that no longer
+     *     exists and take a 404 for ever.
+     *
+     * It governs the is_active flip ONLY. A real NetSuite record delete always
+     * means a remote delete, whatever this is set to (see handleDelete).
+     */
+    const deleteOnInactivate = (cfg) =>
+      String((cfg && cfg.inactiveMethod) || '').toUpperCase().indexOf('DELETE') !== -1;
+
+    /**
+     * Inactivation expressed as a remote DELETE.
+     *
+     * On success the record forgets its remote identity: UUID and stored
+     * payload are cleared and synced goes false, because the Middleware no
+     * longer holds this record at all. `synced = true` would claim the
+     * Middleware has its current payload, and it has nothing.
+     *
+     * The consequence is deliberate: reactivating the record later finds no
+     * UUID, so operationFor returns CREATE and it is pushed as a new object.
+     * That is the only correct outcome once the old one has been deleted.
+     */
+    const inactivateByDelete = (entry, unit, cfg, trigger, correlation) => {
+      const target = logIo.resolveLogTarget({
+        entry: entry, unit: unit, operation: C.OPERATION.DELETE,
+        payload: '', cfg: cfg, reason: reasonFor(unit), correlation: correlation
+      });
+
+      const res = client.call({
+        entry: entry, unit: unit, cfg: cfg, target: target,
+        endpoint: entry.endpoints.remove, pathParams: { uuid: unit.storedUuid },
+        body: null, operation: C.OPERATION.DELETE, payload: '',
+        trigger: trigger, correlation: correlation, requestUuid: correlation
+      });
+
+      log.debug({
+        title: 'RB inactivate by DELETE ' + unit.recordType + '/' + unit.recordId,
+        details: {
+          uuid: unit.storedUuid, ok: res.ok, httpStatus: res.httpStatus,
+          suppressed: res.suppressed, dryRun: res.dryRun, skipped: res.skipped
+        }
+      });
+
+      if (res.ok || res.httpStatus === 404) {
+        clearRemoteIdentity(entry, unit);
+        logIo.closeSuccess(target, res);
+        return { ok: true, inactivatedByDelete: true };
+      }
+      if (res.suppressed || res.dryRun) {
+        logIo.closeNoAction(target, res,
+          res.suppressed
+            ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+            : 'Dry-run mode is on; the inactivation delete was not sent.');
+        logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
+        return { ok: false, suppressed: true };
+      }
+      if (res.skipped) {
+        logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+          res.errorMessage || 'Kill switch is on; the inactivation delete was not sent.');
+        logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null,
+          res.errorMessage || 'Kill switch is on; no call was made.');
+        return { ok: false, skipped: true };
+      }
+      writeBackFailure(entry, unit, res.errorMessage);
+      // The record still exists here, so a retry COULD run — but retrying a
+      // delete that the Middleware refused usually means the object is in a
+      // state only TrackTrace can resolve. Put it in front of a person.
+      logIo.closeNeedsReview(target, res,
+        'Inactivate Method is DELETE and the Middleware refused the delete: ' +
+        (res.errorMessage || 'no message') + '. The NetSuite record is ' +
+        'inactive; the remote object is not.',
+        'Confirm with TrackTrace whether ' + unit.storedUuid + ' can be ' +
+        'deleted. If it cannot, switch Inactivate Method to ' +
+        'PUT_IS_ACTIVE_FALSE and re-save the record.');
+      return { ok: false, error: res.errorMessage };
+    };
+
+    /**
+     * The Middleware no longer holds this record. Forget the remote identity so
+     * nothing ever PUTs to a dead UUID again.
+     */
+    const clearRemoteIdentity = (entry, unit) => {
+      const values = {};
+      if (unit.uuidField) values[unit.uuidField] = '';
+      if (unit.payloadField) values[unit.payloadField] = '';
+      if (unit.syncedField) values[unit.syncedField] = false;
+      if (unit.errorField) values[unit.errorField] = '';
+      if (unit.lastSyncField) values[unit.lastSyncField] = new Date();
+      if (unit.lastTryField) values[unit.lastTryField] = new Date();
+      if (unit.tryResultField)
+        values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.SYNCED);
+
+      try {
+        record.submitFields({
+          type: unit.recordType, id: unit.recordId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) {
+        logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+      }
     };
 
     const reasonFor = (unit) => {
@@ -1268,48 +1415,241 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       DELETE_CACHE[key] = cached;
     };
 
-    /** afterSubmit on DELETE — only when configured to, and only with a UUID. */
-    const handleDelete = (entry, oldRecord, cfg) => {
-      if (!entry.endpoints || !entry.endpoints.remove) return [];
-      if (String(cfg.inactiveMethod).toUpperCase().indexOf('DELETE') === -1) return [];
-
+    /** afterSubmit on DELETE — always fires for a configured endpoint, and only with a UUID. */
+    /**
+     * What has to be deleted remotely, and where its UUID comes from.
+     *
+     * DELETE_CACHE is filled in beforeSubmit — and in SuiteScript each User
+     * Event entry point is its OWN execution, so module-level state does NOT
+     * survive from beforeSubmit into afterSubmit. That is why the log read
+     * `{"DELETE_CACHE": {}}` and no delete was ever sent: the cache can never
+     * be the only source. It is still tried first, for the case where both run
+     * in one execution.
+     *
+     * Order of resolution:
+     *   1. DELETE_CACHE   — same execution, if it happens to be populated
+     *   2. ctx.oldRecord  — populated in afterSubmit on DELETE
+     *   3. the Sync Log   — the only witness left once the record is gone
+     *
+     * @returns {Array<{uomId:string|null, uuid:string, from:string}>}
+     */
+    const resolveDeleteUuids = (entry, oldRecord, cfg) => {
       const cached = DELETE_CACHE[oldRecord.type + '|' + oldRecord.id] || {};
-      const uuids = entry.key === 'ITEM'
-        ? (cached.uomUuids || [])            // one product per UOM row
-        : (cached.uuid ? [cached.uuid] : []);
-      if (!uuids.length) return [];
+      const out = [];
+      const seen = {};
+      const add = (uuid, uomId, from) => {
+        const u = String(uuid || '');
+        if (!u || seen[u]) return;
+        seen[u] = true;
+        out.push({ uuid: u, uomId: uomId || null, from: from });
+      };
+
+      if (entry.key === 'ITEM') {
+        (cached.uomUuids || []).forEach((u) => add(u, null, 'DELETE_CACHE'));
+
+        // UOM rows are not searched after item deletion because the item link is
+        // already cleared; use the Sync Log as the fallback source for UOM UUIDs.
+        if (!out.length)
+          logIo.syncedUnitUuids(entry, oldRecord.id)
+            .forEach((u) => add(u.uuid, u.uomId, 'Sync Log'));
+
+      } else {
+        add(cached.uuid, null, 'DELETE_CACHE');
+
+        if (!out.length && entry.fields && entry.fields.uuid) {
+          try { add(oldRecord.getValue({ fieldId: entry.fields.uuid }), null, 'oldRecord'); }
+          catch (e) { /* fall through to the log */ }
+        }
+
+        if (!out.length) {
+          const prior = logIo.lastSuccess(
+            { recordType: oldRecord.type, recordId: oldRecord.id, uomId: null }, entry);
+          if (prior && prior.uuid) add(prior.uuid, null, 'Sync Log ' + prior.logId);
+        }
+      }
+
+      log.debug({
+        title: 'RB resolveDeleteUuids ' + oldRecord.type + '/' + oldRecord.id,
+        details: {
+          key: entry.key, found: out.length, units: out,
+          cacheWasEmpty: !Object.keys(cached).length
+        }
+      });
+      return out;
+    };
+
+    /**
+     * An orphaned UOM Detail row forgets the product it used to be.
+     *
+     * Its parent item has been deleted, so the row itself survives with a null
+     * item link. Leaving the UUID and stored payload on it would mean a row
+     * that claims to be in sync with something that no longer exists.
+     */
+    const forgetUomRow = (uomRowId) => {
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      try {
+        record.submitFields({
+          type: C.REC.UOM, id: uomRowId,
+          values: {
+            [U.uuid]: '', [U.payload]: '', [U.synced]: false,
+            [U.lastTry]: new Date(),
+            [U.tryResult]: lists.id(C.LIST.tryResult, C.TRY.SYNCED)
+          },
+          options: { ignoreMandatoryFields: true }
+        });
+        log.debug({
+          title: 'RB orphaned UOM row cleared ' + uomRowId,
+          details: 'parent item deleted; UUID and stored payload removed'
+        });
+      } catch (e) {
+        log.error({ title: 'RB forgetUomRow ' + uomRowId, details: e });
+      }
+    };
+
+    const handleDelete = (entry, oldRecord, cfg) => {
+      try {
+        return runDelete(entry, oldRecord, cfg);
+      } catch (e) {
+        // A delete has no master record left to stamp and no retry path, so an
+        // exception here is invisible unless it becomes a work item.
+        logIo.exception(entry, { type: oldRecord.type, id: oldRecord.id }, e, {
+          cfg: cfg, operation: C.OPERATION.DELETE, errorCode: 'DELETE_EXCEPTION',
+          subjectDeleted: true,
+          note: 'The NetSuite record was deleted but the SuiteApp threw while ' +
+            'removing it from the Middleware.',
+          suggested: 'Check whether the remote object still exists and delete ' +
+            'it by hand if it does. Read the execution log for the ' +
+            'stack, fix the cause, then mark this work item Resolved.'
+        });
+        return [];
+      }
+    };
+
+    const runDelete = (entry, oldRecord, cfg) => {
+      log.debug({
+        title: 'RB delete ' + oldRecord.type + '/' + oldRecord.id,
+        details: { key: entry.key, endpoints: entry.endpoints }
+      });
 
       const correlation = util.uuid();
-      return uuids.map((uuid) => {
+      const subject = {
+        recordType: oldRecord.type, recordId: oldRecord.id, uomId: null,
+        itemId: entry.key === 'ITEM' ? oldRecord.id : null,
+        // The NetSuite record is gone. Its internal id is no longer a legal
+        // value for the typed subject reference fields on the log, so those are
+        // left blank and Record Type + NetSuite Internal ID carry the identity.
+        subjectDeleted: true
+      };
+
+      // Nothing can ever sync this record again, so an open work item for it is
+      // dead. Cancel it here or it sits on the reconciliation page for ever
+      // describing a record that no longer exists.
+      logIo.closeStaleWorkItem(subject,
+        'Cancelled: the NetSuite record was deleted.', C.STATUS.CLOSED_CANCELLED);
+
+      // Inactivate Method governs only the is_active flip (§18 q2). A real
+      // NetSuite DELETE always means a remote delete, whatever that is set to.
+      if (!entry.endpoints || !entry.endpoints.remove) {
+        logIo.recordNoCall({
+          entry: entry, unit: subject, cfg: cfg,
+          operation: C.OPERATION.DELETE,
+          status: C.STATUS.CLOSED_CANCELLED, outcome: C.OUTCOME.SKIPPED,
+          trigger: C.TRIGGER.INITIAL, correlation: correlation,
+          reason: C.REASON.AWAITING_DECISION,
+          note: 'The record was deleted in NetSuite, but ' + entry.key +
+            ' has no Middleware delete endpoint configured, so nothing ' +
+            'was sent. The remote object, if any, is now an orphan.'
+        });
+        return [];
+      }
+
+      const units = resolveDeleteUuids(entry, oldRecord, cfg);
+
+      if (!units.length) {
+        // Not an error, and it still has to be visible: the master record is
+        // gone, so the log is the only place this can be recorded.
+        logIo.recordNoCall({
+          entry: entry, unit: subject, cfg: cfg,
+          operation: C.OPERATION.DELETE,
+          status: C.STATUS.CLOSED_NO_ACTION, outcome: C.OUTCOME.SKIPPED,
+          trigger: C.TRIGGER.INITIAL, correlation: correlation,
+          note: 'The record was deleted in NetSuite. No Middleware UUID could ' +
+            'be found for it in the record or in the Sync Log, so it had ' +
+            'never been accepted remotely and there was nothing to delete.'
+        });
+        return [];
+      }
+
+      return units.map((u) => {
         const unit = Object.assign({
-          recordType: oldRecord.type, recordId: oldRecord.id, uomId: null,
-          storedUuid: uuid, storedPayload: null, storedSynced: true, data: {}
+          recordType: oldRecord.type, recordId: oldRecord.id,
+          uomId: u.uomId, itemId: subject.itemId,
+          subjectDeleted: true,
+          storedUuid: u.uuid, storedPayload: null, storedSynced: true, data: {}
         }, unitFields({}));
+
+        // Per-unit for an item: each UOM row is its own work item.
+        if (u.uomId)
+          logIo.closeStaleWorkItem(unit,
+            'Cancelled: the parent NetSuite item was deleted.',
+            C.STATUS.CLOSED_CANCELLED);
 
         const target = logIo.resolveLogTarget({
           entry: entry, unit: unit,
-          operation: C.OPERATION.DELETE, payload: '', cfg: cfg
+          operation: C.OPERATION.DELETE, payload: '', cfg: cfg,
+          correlation: correlation
         });
 
         const res = client.call({
           entry: entry, unit: unit, cfg: cfg, target: target,
-          endpoint: entry.endpoints.remove, pathParams: { uuid: uuid },
+          endpoint: entry.endpoints.remove, pathParams: { uuid: u.uuid },
           body: null, operation: C.OPERATION.DELETE, payload: '',
-          trigger: C.TRIGGER.INITIAL, correlation: correlation
+          trigger: C.TRIGGER.INITIAL, correlation: correlation,
+          requestUuid: correlation
         });
 
-        // A 404 on a delete means it is already gone, which is the outcome asked
-        // for. Treat it as success rather than opening a work item nobody can close.
-        if (res.ok || res.httpStatus === 404) logIo.closeSuccess(target, res);
+        log.debug({
+          title: 'RB delete call ' + u.uuid,
+          details: {
+            uuidFrom: u.from, uomId: u.uomId, ok: res.ok,
+            httpStatus: res.httpStatus, suppressed: res.suppressed,
+            dryRun: res.dryRun, skipped: res.skipped,
+            errorMessage: res.errorMessage || null
+          }
+        });
+
+        // A 404 on a delete means it is already gone, which is the outcome
+        // asked for. Success, not a work item nobody can close.
+        if (res.ok || res.httpStatus === 404) {
+          logIo.closeSuccess(target, res);
+          // The item is gone but its UOM Detail rows are NOT — the item link is
+          // onparentdelete=SET_NULL, so they survive as orphans. Strip the
+          // remote identity from the row we just deleted, or it keeps a UUID
+          // pointing at a Middleware product that no longer exists.
+          if (u.uomId) forgetUomRow(u.uomId);
+        }
         else if (res.suppressed || res.dryRun)
           logIo.closeNoAction(target, res,
             res.suppressed
-              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') +
+              '. The NetSuite record is deleted; the remote object is not.'
               : 'Dry-run mode is on; the delete was not sent.');
         else if (res.skipped)
           logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
             res.errorMessage || 'Kill switch is on; the delete was not sent.');
-        else logIo.closeFailure(target, res, cfg);
+        else
+          // NOT closeFailure. The retry sweep rebuilds the payload from the
+          // master record, and for a delete that record is gone — this would
+          // back off for ever and never be retried, while the Middleware keeps
+          // an object NetSuite has thrown away.
+          logIo.closeNeedsReview(target, res,
+            'The NetSuite record was deleted but the Middleware refused the ' +
+            'delete: ' + (res.errorMessage || 'no message') + '.',
+            'Delete ' + entry.key + ' ' + u.uuid + ' in the Middleware by hand, ' +
+            'or ask TrackTrace to remove it. NetSuite cannot retry this — the ' +
+            'record it belonged to no longer exists. Mark this work item ' +
+            'Resolved once the remote object is gone.');
+
         return res;
       });
     };

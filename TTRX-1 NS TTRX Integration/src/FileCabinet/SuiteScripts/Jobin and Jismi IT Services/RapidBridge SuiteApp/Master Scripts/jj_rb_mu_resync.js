@@ -47,9 +47,10 @@ define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '.
           if (f.lastTry && f.tryResult)
             logIo.stampTry({
               recordType: recordType, recordId: recordId,
-              lastTryField: f.lastTry, tryResultField: f.tryResult
+              lastTryField: f.lastTry, tryResultField: f.tryResult,
+              errorField: f.error || null
             },
-              C.TRY.SKIP_FEATURE);
+              C.TRY.SKIP_FEATURE, null, '');
           return;
         }
 
