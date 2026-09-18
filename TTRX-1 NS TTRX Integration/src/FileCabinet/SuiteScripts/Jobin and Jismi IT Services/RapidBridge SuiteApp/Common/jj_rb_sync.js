@@ -416,6 +416,15 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const trigger = o.trigger || C.TRIGGER.INITIAL;
       const correlation = o.correlation || util.uuid();
 
+      log.debug({
+        title: 'RB sync.run ' + recordType + '/' + recordId,
+        details: {
+          key: entry && entry.key, syncType: entry && entry.syncType,
+          trigger: trigger, correlation: correlation,
+          isCreate: !!o.isCreate, onlyUomRowId: o.onlyUomRowId || null
+        }
+      });
+
       // A UOM row is not its own object — it is one unit of its parent item.
       if (entry.key === 'UOM') return runUomRow(recordId, cfg, trigger, correlation);
 
@@ -446,6 +455,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.openDeferred({
             entry: entry, unit: stampUnit, cfg: cfg,
             reason: units.reason || C.REASON.NO_UOM,
+            status: C.STATUS.OPEN_REVIEW,          // a person must fix this
+            outcome: C.OUTCOME.SKIPPED,            // no call was made
+            trigger: trigger, note: units.blocked,
             correlation: correlation
           });
           logIo.stampTry(stampUnit, units.blockedTry);
@@ -458,12 +470,26 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const inlineCap = Number(cfg.maxInline) || 5;
       const results = [];
 
+      log.debug({
+        title: 'RB units resolved ' + recordType + '/' + recordId,
+        details: {
+          units: units.list.length, inlineCap: inlineCap,
+          uomRows: units.list.map((u) => u.uomId || null)
+        }
+      });
+
       units.list.forEach((unit, i) => {
 
         if (i >= inlineCap) {
           logIo.openDeferred({
             entry: entry, unit: unit, cfg: cfg,
-            reason: C.REASON.PAYLOAD_CHANGED, correlation: correlation
+            reason: C.REASON.PAYLOAD_CHANGED,
+            status: C.STATUS.OPEN_PENDING,         // the sweep will call
+            outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger,
+            note: 'Beyond the inline cap of ' + inlineCap +
+              ' units for this save; queued for the reconciliation sweep.',
+            correlation: correlation
           });
           logIo.stampTry(unit, C.TRY.DEFERRED);
           results.push({ deferred: true });
@@ -472,6 +498,21 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         const gate = preflight(entry, unit, cfg);
         if (gate) {
+          if (gate.needsHuman) {
+            logIo.openDeferred({
+              entry: entry, unit: unit, cfg: cfg,
+              reason: C.REASON.AWAITING_DECISION,
+              status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+              trigger: trigger, note: gate.note || gate.reason,
+              correlation: correlation
+            });
+          } else {
+            // A routine skip. No row: §12.9 keeps the log small, and the
+            // record's own Last Sync Try fields carry the audit trail.
+            logIo.closeStaleWorkItem(unit,
+              'Closed without a call: this record is no longer eligible to ' +
+              'sync (' + gate.reason + ').');
+          }
           logIo.stampTry(unit, gate.tryResult);
           results.push({ skipped: true, reason: gate.reason });
           return;
@@ -485,7 +526,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             if (!pu) {
               logIo.openDeferred({
                 entry: entry, unit: unit, cfg: cfg,
-                reason: C.REASON.MISSING_PARENT, correlation: correlation
+                reason: C.REASON.MISSING_PARENT,
+                status: C.STATUS.OPEN_PENDING,     // resolves once the parent syncs
+                outcome: C.OUTCOME.SKIPPED,
+                trigger: trigger,
+                note: 'Parent location ' + textOf(unit.data.parent) +
+                  ' has no Middleware UUID yet.',
+                correlation: correlation
               });
               logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT);
               results.push({ ok: false, blocked: 'parent location not synced' });
@@ -500,15 +547,100 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const sendBody = util.stripCompare(payload);
 
         // ── step 4: THE TRIGGER TEST — a direct string comparison against the
-        //    payload the Middleware last accepted.
+        //    payload the Middleware last accepted, as the RECORD remembers it.
         if (util.samePayload(payloadStr, unit.storedPayload)
           && unit.storedSynced === true && unit.storedUuid) {
+          log.debug({
+            title: 'RB no change (record) ' + unit.recordType + '/' + unit.recordId,
+            details: {
+              uomId: unit.uomId || null, uuid: unit.storedUuid,
+              payloadLength: payloadStr.length
+            }
+          });
+          // An earlier attempt may have failed and left a work item open. No
+          // call is coming this time, so close it here or it never closes.
+          logIo.closeStaleWorkItem(unit,
+            'Closed without a call: the record now matches the payload the ' +
+            'Middleware last accepted, so the change this work item was ' +
+            'opened for no longer exists.');
           logIo.stampTry(unit, C.TRY.NO_CHANGE);
           results.push({ skipped: true, noChange: true });
           return;
         }
 
-        const operation = unit.storedUuid ? C.OPERATION.UPDATE : C.OPERATION.CREATE;
+        // ── step 4b: the record says something changed. Before spending a call
+        //    on it, ask the SYNC LOG what the Middleware last accepted. The
+        //    record's memory can be missing while the Middleware's is not.
+        //
+        //    Two separate jobs, and the first matters far more than the second:
+        //
+        //      1. ADOPT a UUID the record has lost. Without it the next line
+        //         resolves to CREATE and the Middleware gets a duplicate.
+        //      2. SKIP a send that would change nothing remotely.
+        //
+        //    A forced re-sync (Mass Update, reconciliation sweep) skips job 2
+        //    on purpose: re-sending is the entire point of forcing, and the
+        //    Mass Update works by clearing the stored payload — if the log
+        //    could veto that, the force button would do nothing.
+        const prior = logIo.lastSuccess(unit, entry);
+
+        if (prior && prior.uuid && !unit.storedUuid) {
+          log.audit({
+            title: 'RB adopted UUID from Sync Log',
+            details: {
+              recordType: unit.recordType, recordId: unit.recordId,
+              uomId: unit.uomId || null, uuid: prior.uuid, logId: prior.logId,
+              note: 'record had no UUID; a CREATE here would have duplicated it'
+            }
+          });
+          unit.storedUuid = prior.uuid;
+          if (unit.uuidField) {
+            try {
+              record.submitFields({
+                type: unit.recordType, id: unit.recordId,
+                values: { [unit.uuidField]: prior.uuid },
+                options: { ignoreMandatoryFields: true }
+              });
+            } catch (e) {
+              // Not fatal: the call below already uses the adopted value.
+              log.error({ title: 'RB could not write adopted UUID', details: e });
+            }
+          }
+        }
+
+        const forced = trigger === C.TRIGGER.MASS_UPDATE
+          || trigger === C.TRIGGER.RECON;
+
+        if (!forced && prior && unit.storedUuid
+          && util.samePayload(payloadStr, prior.payload)) {
+          log.debug({
+            title: 'RB no change (log) ' + unit.recordType + '/' + unit.recordId,
+            details: {
+              uomId: unit.uomId || null, uuid: unit.storedUuid,
+              matchedLogId: prior.logId, matchedAt: prior.at,
+              payloadLength: payloadStr.length,
+              note: 'record had forgotten; healing it instead of calling out'
+            }
+          });
+          logIo.closeStaleWorkItem(unit,
+            'Closed without a call: the record was reverted to the payload ' +
+            'accepted by Sync Log ' + prior.logId + ', so the change this work ' +
+            'item was opened for no longer exists.');
+          healFromLog(entry, unit, payloadStr);
+          results.push({ skipped: true, noChange: true, fromLog: true });
+          return;
+        }
+
+        const operation = operationFor(unit, payload);
+
+        log.debug({
+          title: 'RB calling ' + operation + ' ' + unit.recordType + '/' + unit.recordId,
+          details: {
+            uomId: unit.uomId || null, uuid: unit.storedUuid || null,
+            trigger: trigger, forced: forced, payloadLength: payloadStr.length,
+            priorSuccessLogId: prior ? prior.logId : null
+          }
+        });
 
         const target = logIo.resolveLogTarget({                            // step 5
           entry: entry, unit: unit, operation: operation, payload: payloadStr,
@@ -533,10 +665,21 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               correlation, trigger);
 
         } else if (res.suppressed || res.dryRun) {
+          // Built, stringified, logged, not sent. Nothing is coming back for
+          // it, so the work item closes rather than sitting open for ever.
+          logIo.closeNoAction(target, res,
+            res.suppressed
+              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') +
+              '. The payload is stored; nothing was sent.'
+              : 'Dry-run mode is on. The payload is stored; nothing was sent.');
           logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
           results.push({ ok: false, suppressed: true });
 
         } else if (res.skipped) {
+          // Kill switch. The change is real and STILL UNSENT, so the work item
+          // stays open on purpose — but parked, not "retrying".
+          logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+            res.errorMessage || 'Kill switch is on; no call was made.');
           logIo.stampTry(unit, C.TRY.FAIL_PRE_API);
           results.push({ ok: false, skipped: true });
 
@@ -548,6 +691,19 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       });
 
       if (entry.key === 'ITEM') rollUpItem(entry, recordId, recordType, results);  // step 8
+
+      log.debug({
+        title: 'RB sync.run done ' + recordType + '/' + recordId,
+        details: {
+          correlation: correlation,
+          ok: results.filter((r) => r.ok).length,
+          noChange: results.filter((r) => r.noChange).length,
+          skipped: results.filter((r) => r.skipped && !r.noChange).length,
+          deferred: results.filter((r) => r.deferred).length,
+          failed: results.filter((r) => r.error).length
+        }
+      });
+
       return results;
     };
 
@@ -631,11 +787,44 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         if (util.truthy(unit.data[entry.fields.isDefault]))
           return { tryResult: C.TRY.SKIP_INELIGIBLE, reason: 'is_default row' };
         if (util.blank(textOf(unit.data[entry.fields.code])))
-          return { tryResult: C.TRY.FAIL_PRE_API, reason: 'dosage code is blank' };
+          // Not a routine skip: this record can NEVER sync until someone types a
+          // code. §12.9 gives a row to anything a human has to act on, or the
+          // record fails silently for ever.
+          return {
+            tryResult: C.TRY.FAIL_PRE_API, reason: 'dosage code is blank',
+            needsHuman: true,
+            note: 'The dosage code is the identity the Middleware keys on and it ' +
+              'is blank. Nothing can be sent until it is filled in.'
+          };
       }
       if (util.truthy(unit.data.isinactive) && cfg.syncInactive === false && !unit.storedUuid)
         return { tryResult: C.TRY.SKIP_INELIGIBLE, reason: 'inactive, never synced' };
       return null;
+    };
+
+    /**
+     * §3 list 3 — Sync Operation. 'Update' is true but uninformative when the
+     * update IS the activation change. Inactivate / Reactivate were declared
+     * and never used; this is what they are for, and it lets a reader see from
+     * the log list alone why a record was pushed.
+     *
+     * Derived by comparing is_active in the payload about to be sent against
+     * is_active in the payload the Middleware last accepted. No extra reads.
+     */
+    const operationFor = (unit, payload) => {
+      if (!unit.storedUuid) return C.OPERATION.CREATE;
+      if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'is_active'))
+        return C.OPERATION.UPDATE;
+
+      const prev = util.safeJson(unit.storedPayload || '');
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev, 'is_active'))
+        return C.OPERATION.UPDATE;
+
+      const was = prev.is_active === true || String(prev.is_active) === 'true';
+      const now = payload.is_active === true || String(payload.is_active) === 'true';
+      if (was && !now) return C.OPERATION.INACTIVATE;
+      if (!was && now) return C.OPERATION.REACTIVATE;
+      return C.OPERATION.UPDATE;
     };
 
     const reasonFor = (unit) => {
@@ -649,6 +838,32 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     // ═══════════════════════════════════════════════════════════════════════════
 
     /** E1 — one submitFields, and it CLEARS the error. §11.8. */
+    /**
+     * The Middleware already holds this exact payload; the RECORD is what had
+     * forgotten. Restore its memory without pretending a call was made:
+     * last_sync is left alone — nothing synced just now — and the try result
+     * says No change, not Synced.
+     */
+    const healFromLog = (entry, unit, payloadStr) => {
+      const values = {};
+      if (unit.uuidField && unit.storedUuid) values[unit.uuidField] = unit.storedUuid;
+      if (unit.payloadField) values[unit.payloadField] = payloadStr;
+      if (unit.syncedField) values[unit.syncedField] = true;
+      if (unit.errorField) values[unit.errorField] = '';
+      if (unit.lastTryField) values[unit.lastTryField] = new Date();
+      if (unit.tryResultField)
+        values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.NO_CHANGE);
+
+      try {
+        record.submitFields({
+          type: unit.recordType, id: unit.recordId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) {
+        logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+      }
+    };
+
     const writeBackSuccess = (entry, unit, uuid, payloadStr) => {
       const values = {};
       if (unit.uuidField && uuid) values[unit.uuidField] = uuid;
@@ -872,7 +1087,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         if (i >= cap) {
           logIo.openDeferred({
             entry: addrEntry, unit: addrUnit, cfg: cfg,
-            reason: C.REASON.PAYLOAD_CHANGED, correlation: correlation
+            reason: C.REASON.PAYLOAD_CHANGED,
+            status: C.STATUS.OPEN_PENDING, outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger,
+            note: 'Beyond the inline cap of ' + cap + ' addresses for this save.',
+            correlation: correlation
           });
           return;
         }
@@ -896,7 +1115,15 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.closeSuccess(target, res);
           writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
             C.ADDR.uuid, res.uuid || '');
-        } else if (!res.suppressed && !res.dryRun) {
+        } else if (res.suppressed || res.dryRun) {
+          logIo.closeNoAction(target, res,
+            res.suppressed
+              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+              : 'Dry-run mode is on; nothing was sent.');
+        } else if (res.skipped) {
+          logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+            res.errorMessage || 'Kill switch is on; no call was made.');
+        } else {
           logIo.closeFailure(target, res, cfg);
           writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
             C.ADDR.error, util.clip(res.errorMessage, 900));
@@ -1074,7 +1301,15 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         // A 404 on a delete means it is already gone, which is the outcome asked
         // for. Treat it as success rather than opening a work item nobody can close.
         if (res.ok || res.httpStatus === 404) logIo.closeSuccess(target, res);
-        else if (!res.suppressed && !res.dryRun) logIo.closeFailure(target, res, cfg);
+        else if (res.suppressed || res.dryRun)
+          logIo.closeNoAction(target, res,
+            res.suppressed
+              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+              : 'Dry-run mode is on; the delete was not sent.');
+        else if (res.skipped)
+          logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+            res.errorMessage || 'Kill switch is on; the delete was not sent.');
+        else logIo.closeFailure(target, res, cfg);
         return res;
       });
     };

@@ -35,6 +35,9 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
     const beforeLoad = (ctx) => {
       try {
         const entry = entryFor(ctx.newRecord.type);
+
+        log.debug('Master UE - beforeLoad', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id || null, eventType: ctx.type, entry: entry ? entry.key : null });
+
         if (!entry || entry.key === 'CONFIG') return;
 
         sync.lockSyncFields(ctx.form, entry);
@@ -52,6 +55,8 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
     const beforeSubmit = (ctx) => {
       const entry = entryFor(ctx.newRecord.type);
       if (!entry) return;
+
+      log.debug('Master UE - beforeSubmit', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id || null, eventType: ctx.type, entry: entry.key });
 
       // The one save the SuiteApp refuses — a second Active configuration row.
       // Deliberately outside the try/catch: it MUST be able to throw.
@@ -88,28 +93,35 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
       if (!entry || entry.key === 'CONFIG') return;   // Config never syncs
 
       try {
+        log.debug('Master UE - afterSubmit', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, eventType: ctx.type, entry: entry.key });
+
         const cfg = config.get();
+        log.debug("Master UE - afterSubmit config", cfg);
 
         if (ctx.type === ctx.UserEventType.DELETE) {
           if (!cfg) return;
+          log.debug('Master UE - processing delete', { recordType: ctx.oldRecord.type, recordId: ctx.oldRecord.id, entry: entry.key });
           return sync.handleDelete(entry, ctx.oldRecord, cfg);
         }
 
         // ── P4. GUARD 1 — free. Our own write-back changes only sync-control
         //    fields, and this is what stops it re-triggering the sync.
-        if (util.onlySyncFieldsChanged(ctx.oldRecord, ctx.newRecord,
-          C.SYNC_CONTROL_FIELDS)) return;
+        if (util.onlySyncFieldsChanged(ctx.oldRecord, ctx.newRecord, C.SYNC_CONTROL_FIELDS)) return;
+
+        log.debug("After onlySyncFieldsChanged");
 
         // ── P5. No configuration ⇒ return silently rather than guess a host.
         if (!cfg) return;
 
         // ── P6. Feature gate. Dosage Form needs use_dosage; Bin needs use_bins.
         if (entry.featureFlag && cfg[flagKey(entry.featureFlag)] !== true) {
+          log.debug('Master UE - feature disabled', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, entry: entry.key, featureFlag: entry.featureFlag, configKey: flagKey(entry.featureFlag) });
           stampFeatureSkip(entry, ctx.newRecord);
           return;
         }
 
         // ── GUARD 2 — the payload comparison, inside sync.run().
+        log.debug('Master UE - starting sync', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, entry: entry.key, isCreate: ctx.type === ctx.UserEventType.CREATE });
         sync.run({
           entry: entry,
           recordId: ctx.newRecord.id,
@@ -119,6 +131,8 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
           trigger: triggerFor(runtime.executionContext),
           isCreate: ctx.type === ctx.UserEventType.CREATE
         });
+
+        log.debug('Master UE - sync completed', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, entry: entry.key });
 
       } catch (e) {
         // NEVER re-throw in afterSubmit: the record is already committed.
@@ -137,11 +151,22 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
     /** A closed gate is still an evaluation, and it must be visible. §11.5. */
     const stampFeatureSkip = (entry, rec) => {
       const f = entry.fields || {};
+
+      // Turning a feature off while a work item is open would leave that work
+      // item retrying for ever against a sync nobody wants any more. Cancel it.
+      logIo.closeStaleWorkItem(
+        { recordType: rec.type, recordId: rec.id, uomId: null },
+        'Cancelled: the ' + entry.key + ' feature was switched off in the ' +
+        'RapidBridge configuration, so this sync is no longer wanted.',
+        C.STATUS.CLOSED_CANCELLED);
+
       if (!f.lastTry || !f.tryResult) return;
       logIo.stampTry({
         recordType: rec.type, recordId: rec.id,
         lastTryField: f.lastTry, tryResultField: f.tryResult
       }, C.TRY.SKIP_FEATURE);
+
+      log.debug('Master UE - feature skip stamped', { recordType: rec.type, recordId: rec.id, entry: entry.key, result: C.TRY.SKIP_FEATURE });
     };
 
     const triggerFor = (x) => {

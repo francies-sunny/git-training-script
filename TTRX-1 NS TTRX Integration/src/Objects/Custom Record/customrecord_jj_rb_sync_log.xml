@@ -930,16 +930,16 @@
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>Work item closed successfully. Makes list views trivial. Main records only.</description>
+      <description>Set from this record&apos;s own Call Outcome: checked when the call this record describes came back 2xx. On a main record it also means the work item closed successfully. On a child record it means that attempt is the one that worked - which is what you need to see when reading a retry chain. It is also the flag the engine searches on before every call, to find the payload the Middleware last accepted.</description>
       <displayheight></displayheight>
-      <displaytype>NORMAL</displaytype>
+      <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
       <fieldtype>CHECKBOX</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>Work item closed successfully. Makes list views trivial. Main records only.</help>
+      <help>Set from this record&apos;s own Call Outcome: checked when the call this record describes came back 2xx. On a main record it also means the work item closed successfully. On a child record it means that attempt is the one that worked - which is what you need to see when reading a retry chain. It is also the flag the engine searches on before every call, to find the payload the Middleware last accepted.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -955,7 +955,7 @@
       <searchdefault></searchdefault>
       <searchlevel>2</searchlevel>
       <selectrecordtype></selectrecordtype>
-      <showinlist>F</showinlist>
+      <showinlist>T</showinlist>
       <sourcefilterby></sourcefilterby>
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
@@ -1810,7 +1810,7 @@
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
+      <description>The exact payload string sent on THIS attempt. Written on every record, main and child alike, before the call is made. The engine reads it back from the newest record with Success checked to answer "what does the Middleware already have?" - the safety net that stops a record whose own stored payload was lost from being created a second time.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
@@ -1819,7 +1819,7 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXTAREA</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
+      <help>The exact payload string sent on THIS attempt. Written on every record, main and child alike, before the call is made. The engine reads it back from the newest record with Success checked to answer "what does the Middleware already have?" - the safety net that stops a record whose own stored payload was lost from being created a second time.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>

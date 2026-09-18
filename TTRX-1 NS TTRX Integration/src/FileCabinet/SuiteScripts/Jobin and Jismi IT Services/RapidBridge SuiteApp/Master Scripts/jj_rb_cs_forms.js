@@ -28,6 +28,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
     const JOBS = {
       customrecord_jj_rb_config: {
         fieldChanged: (ctx) => {
+          log.debug("In customrecord_jj_rb_config");
+          console.log("In customrecord_jj_rb_config");
+          log.debug('Master CS - fieldChanged', { recordType: ctx.currentRecord.type, recordId: ctx.currentRecord.id || null, fieldId: ctx.fieldId });
           if (ctx.fieldId !== C.CFG.active) return;
           const rec = ctx.currentRecord;
           if (!util.truthy(rec.getValue({ fieldId: C.CFG.active }))) return;
@@ -81,6 +84,7 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
 
       customrecord_jj_rb_uom_detail: {
         fieldChanged: (ctx) => {
+          log.debug('Master CS - fieldChanged', { recordType: ctx.currentRecord.type, recordId: ctx.currentRecord.id || null, fieldId: ctx.fieldId });
           const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
           if (ctx.fieldId !== U.unit) return;
           const rec = ctx.currentRecord;
@@ -116,6 +120,7 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
 
       customrecord_jj_rb_sync_log: {
         pageInit: (ctx) => {
+          log.debug('Master CS - pageInit', { recordType: ctx.currentRecord.type, recordId: ctx.currentRecord.id || null });
           // A child record's main-only fields are meaningless and misleading.
           const rec = ctx.currentRecord;
           let isChild = false;
@@ -123,7 +128,10 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
           catch (e) { return; }
           if (!isChild) return;
 
-          [C.LOG.status, C.LOG.open, C.LOG.success, C.LOG.payload, C.LOG.attempts,
+          // C.LOG.success is NOT hidden any more: a child record now carries its
+          // own Success flag, set from its own Call Outcome, and that is exactly
+          // what someone reading a retry chain wants to see.
+          [C.LOG.status, C.LOG.open, C.LOG.payload, C.LOG.attempts,
           C.LOG.firstAt, C.LOG.notBefore, C.LOG.exhausted, C.LOG.suggested,
           C.LOG.reason, C.LOG.reconStatus, C.LOG.reconMethod, C.LOG.resolvedBy,
           C.LOG.resolvedOn, C.LOG.resolution, C.LOG.mergedInto, C.LOG.mergedCount
