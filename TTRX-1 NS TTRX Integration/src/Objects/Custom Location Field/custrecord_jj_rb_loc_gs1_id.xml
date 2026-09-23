@@ -1,14 +1,17 @@
 <othercustomfield scriptid="custrecord_jj_rb_loc_gs1_id">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
+  <description></description>
   <displayheight></displayheight>
   <displaytype>NORMAL</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXT</fieldtype>
   <help>GS1 ID for this location.</help>

@@ -1,6 +1,8 @@
 <transactioncolumncustomfield scriptid="custcol_jj_rb_release_bin">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
+  <colbuild>F</colbuild>
   <colexpense>F</colexpense>
   <colexpensereport>F</colexpensereport>
   <colgrouponinvoices>F</colgrouponinvoices>
@@ -18,22 +20,19 @@
   <colpurchase>F</colpurchase>
   <colreturnform>F</colreturnform>
   <colsale>F</colsale>
-  <colstore>F</colstore>
-  <colstorehidden>F</colstorehidden>
   <colstorewithgroups>F</colstorewithgroups>
-  <coltime>F</coltime>
   <coltransferorder>F</coltransferorder>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>The bin the verified quantity was transferred to. Comes from the release payload, defaulting to the location's RapidBridge Good Bin.</description>
+  <description>The bin the verified quantity was transferred to. Comes from the release payload, defaulting to the location&apos;s RapidBridge Good Bin.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>
   <fieldtype>SELECT</fieldtype>
-  <help>The bin the verified quantity was transferred to. Comes from the release payload, defaulting to the location's RapidBridge Good Bin.</help>
+  <help>The bin the verified quantity was transferred to. Comes from the release payload, defaulting to the location&apos;s RapidBridge Good Bin.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <label>Released To Bin</label>
@@ -41,7 +40,7 @@
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <searchlevel>2</searchlevel>
   <selectrecordtype>-242</selectrecordtype>
   <showhierarchy>F</showhierarchy>

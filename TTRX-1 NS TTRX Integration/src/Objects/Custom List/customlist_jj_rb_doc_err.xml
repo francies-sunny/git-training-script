@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_doc_err">
   <description>Document-level rejection codes returned by the inbound RESTlet. These are checked before anything is built, and a failure returns without touching a record. Part of the published API contract.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Inbound Doc Error</name>
   <customvalues>

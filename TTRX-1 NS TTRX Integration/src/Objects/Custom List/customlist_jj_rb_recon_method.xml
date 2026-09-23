@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_recon_method">
-  <description>How a work item was resolved. The audit answer to 'what did someone do about it?'</description>
+  <description>How a work item was resolved. The audit answer to &apos;what did someone do about it?&apos;</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Recon Method</name>
   <customvalues>

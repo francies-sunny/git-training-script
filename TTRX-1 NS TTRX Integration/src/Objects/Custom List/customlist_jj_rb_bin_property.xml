@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_bin_property">
   <description>Storage conditions, sent semicolon-separated.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Bin Property</name>
   <customvalues>

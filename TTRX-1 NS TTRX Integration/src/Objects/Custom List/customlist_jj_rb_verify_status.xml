@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_verify_status">
   <description>Per-line digital-verification state of received stock. Set to Awaiting Verification when the Item Receipt lands the line in the on-hold bin, and moved on by the inventory-release call that bin-transfers the verified quantity to the good bin.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Verify Status</name>
   <customvalues>

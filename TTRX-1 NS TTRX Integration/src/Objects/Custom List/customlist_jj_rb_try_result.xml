@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_try_result">
   <description>The outcome of the last evaluation of a master record, whether or not an API call happened. Written together with Last Sync Try Date/Time (v3.1 section 11.5).</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Sync Try Result</name>
   <customvalues>

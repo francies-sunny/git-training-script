@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_loc_onhold_bin">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -10,6 +11,7 @@
   <displaytype>NORMAL</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>SELECT</fieldtype>
   <help>The bin that received stock lands in until digital verification completes. Inventory state is held in physical bins rather than NetSuite inventory statuses (technical design meeting, 8 September 2026). Mandatory in practice: the inbound Item Receipt cannot place stock and the inventory release cannot transfer it without this. KNOWN LIMITATION (T-32 / R-04): a bin does not remove stock from NetSuite availability, so unverified stock in this bin can still be committed to a sales order.</help>
@@ -20,7 +22,7 @@
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <rectype>-103</rectype>
   <searchcomparefield></searchcomparefield>
   <searchdefault></searchdefault>

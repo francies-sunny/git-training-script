@@ -1,6 +1,8 @@
 <transactioncolumncustomfield scriptid="custcol_jj_rb_hold_bin">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
+  <colbuild>F</colbuild>
   <colexpense>F</colexpense>
   <colexpensereport>F</colexpensereport>
   <colgrouponinvoices>F</colgrouponinvoices>
@@ -18,22 +20,19 @@
   <colpurchase>F</colpurchase>
   <colreturnform>F</colreturnform>
   <colsale>F</colsale>
-  <colstore>F</colstore>
-  <colstorehidden>F</colstorehidden>
   <colstorewithgroups>F</colstorewithgroups>
-  <coltime>F</coltime>
   <coltransferorder>F</coltransferorder>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>The bin this line was received into and where the quantity waits until verification completes. Defaults to the location's RapidBridge On-Hold Bin.</description>
+  <description>The bin this line was received into and where the quantity waits until verification completes. Defaults to the location&apos;s RapidBridge On-Hold Bin.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <encryptatrest>F</encryptatrest>
   <fieldtype>SELECT</fieldtype>
-  <help>The bin this line was received into and where the quantity waits until verification completes. Defaults to the location's RapidBridge On-Hold Bin.</help>
+  <help>The bin this line was received into and where the quantity waits until verification completes. Defaults to the location&apos;s RapidBridge On-Hold Bin.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <label>On-Hold Bin</label>
@@ -41,7 +40,7 @@
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <searchlevel>2</searchlevel>
   <selectrecordtype>-242</selectrecordtype>
   <showhierarchy>F</showhierarchy>

@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_direction">
   <description>Which way the data moved. Master data is always outbound; the value exists so the same log serves transactions later.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Sync Direction</name>
   <customvalues>

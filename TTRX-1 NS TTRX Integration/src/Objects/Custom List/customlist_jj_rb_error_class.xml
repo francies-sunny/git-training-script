@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_error_class">
   <description>Decides whether anything retries automatically.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Error Class</name>
   <customvalues>

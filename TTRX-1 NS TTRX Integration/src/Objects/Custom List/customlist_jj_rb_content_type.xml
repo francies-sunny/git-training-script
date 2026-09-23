@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_content_type">
   <description>How the body is encoded.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Content Type</name>
   <customvalues>

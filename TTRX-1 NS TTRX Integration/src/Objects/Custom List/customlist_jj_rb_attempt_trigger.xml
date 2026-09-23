@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_attempt_trigger">
   <description>What caused this particular call. Initial appears only on a main record.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Call Trigger</name>
   <customvalues>

@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_addr_error">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <applytoallforms>T</applytoallforms>
   <checkspelling>F</checkspelling>
@@ -11,6 +12,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXTAREA</fieldtype>
   <help>Last failure reason for this address. Cleared on a later success.</help>

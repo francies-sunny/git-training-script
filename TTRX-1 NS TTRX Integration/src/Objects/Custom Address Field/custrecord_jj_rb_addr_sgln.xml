@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_addr_sgln">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <applytoallforms>T</applytoallforms>
   <checkspelling>F</checkspelling>
@@ -11,6 +12,7 @@
   <displaytype>NORMAL</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXT</fieldtype>
   <help>GS1 SGLN for this address.</help>

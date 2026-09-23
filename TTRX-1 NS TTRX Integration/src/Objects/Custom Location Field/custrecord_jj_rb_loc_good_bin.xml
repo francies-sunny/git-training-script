@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_loc_good_bin">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -10,6 +11,7 @@
   <displaytype>NORMAL</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>SELECT</fieldtype>
   <help>The destination of the inventory release. Once TrackTrace verification passes, the Middleware calls the inventory-release endpoint and NetSuite creates a BIN TRANSFER from the on-hold bin to this bin. Not an Inventory Status Change - that feature is deliberately not used.</help>
@@ -20,7 +22,7 @@
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <rectype>-103</rectype>
   <searchcomparefield></searchcomparefield>
   <searchdefault></searchdefault>

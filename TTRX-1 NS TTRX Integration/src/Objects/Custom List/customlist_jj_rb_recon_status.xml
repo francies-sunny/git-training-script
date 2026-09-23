@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_recon_status">
   <description>Whether a human still owes an action.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Recon Status</name>
   <customvalues>
@@ -23,7 +22,7 @@
     </customvalue>
     <customvalue scriptid="val_wont_fix">
       <isinactive>F</isinactive>
-      <value>Won't fix</value>
+      <value>Won&apos;t fix</value>
     </customvalue>
   </customvalues>
 </customlist>

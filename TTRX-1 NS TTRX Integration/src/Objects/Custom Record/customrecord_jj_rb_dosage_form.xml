@@ -1,5 +1,6 @@
 <customrecordtype scriptid="customrecord_jj_rb_dosage_form">
   <accesstype>CUSTRECORDENTRYPERM</accesstype>
+  <aidescription></aidescription>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlinedetaching>T</allowinlinedetaching>
@@ -9,12 +10,10 @@
   <allowquickadd>T</allowquickadd>
   <allowquicksearch>F</allowquicksearch>
   <allowuiaccess>T</allowuiaccess>
-  <customsegment></customsegment>
   <description>Dosage form master. The Code is the value sent to the Middleware. Ship the record definition only - no data rows.</description>
   <enabledle>T</enabledle>
   <enablekeywords>T</enablekeywords>
   <enablemailmerge>F</enablemailmerge>
-  <enablenametranslation>F</enablenametranslation>
   <enablenumbering>F</enablenumbering>
   <enableoptimisticlocking>T</enableoptimisticlocking>
   <enablesystemnotes>T</enablesystemnotes>
@@ -30,7 +29,6 @@
   <numberingmindigits></numberingmindigits>
   <numberingprefix></numberingprefix>
   <numberingsuffix></numberingsuffix>
-  <publicpermissionlevel>NONE</publicpermissionlevel>
   <recordname>RapidBridge Dosage Form</recordname>
   <showcreationdate>F</showcreationdate>
   <showcreationdateonlist>F</showcreationdateonlist>
@@ -44,6 +42,7 @@
   <customrecordcustomfields>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_code">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -84,6 +83,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_uuid">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -124,13 +124,14 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_payload">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
+      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</description>
       <displayheight></displayheight>
       <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
@@ -139,7 +140,7 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXTAREA</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
+      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -164,6 +165,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_synced">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -204,6 +206,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_last_sync">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -244,6 +247,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_last_try">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -284,6 +288,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_try_result">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -308,7 +313,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -324,6 +329,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_error">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -364,6 +370,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_df_is_default">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>

@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_sync_status">
   <description>The state of the whole work item. Main records only - leave blank on a child. Distinct from Call Outcome (v3.1 section 12.3). Drives every worklist.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Work Item Status</name>
   <customvalues>

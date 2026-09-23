@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_line_err">
   <description>Line-level rejection codes. An inbound write is ALL-OR-NOTHING: any line failure rejects the whole receipt or fulfilment, and the failure envelope names every failing line in failed_lines[]. A success carries no per-line array.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Inbound Line Error</name>
   <customvalues>

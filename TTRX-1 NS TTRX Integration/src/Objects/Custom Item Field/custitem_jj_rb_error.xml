@@ -1,6 +1,6 @@
 <itemcustomfield scriptid="custitem_jj_rb_error">
   <accesslevel>2</accesslevel>
-  <appliestoexpense>F</appliestoexpense>
+  <aidescription></aidescription>
   <appliestogroup>F</appliestogroup>
   <appliestoinventory>T</appliestoinventory>
   <appliestoitemassembly>T</appliestoitemassembly>
@@ -21,6 +21,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXTAREA</fieldtype>
   <globalsearch>F</globalsearch>
@@ -29,7 +30,6 @@
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>
-  <itemmatrix>F</itemmatrix>
   <itemsubtype>BOTH</itemsubtype>
   <label>RapidBridge Item Sync Error</label>
   <linktext></linktext>

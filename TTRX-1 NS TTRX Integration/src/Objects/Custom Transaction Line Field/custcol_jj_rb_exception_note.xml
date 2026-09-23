@@ -1,6 +1,8 @@
 <transactioncolumncustomfield scriptid="custcol_jj_rb_exception_note">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
+  <colbuild>F</colbuild>
   <colexpense>F</colexpense>
   <colexpensereport>F</colexpensereport>
   <colgrouponinvoices>F</colgrouponinvoices>
@@ -18,10 +20,7 @@
   <colpurchase>F</colpurchase>
   <colreturnform>F</colreturnform>
   <colsale>F</colsale>
-  <colstore>F</colstore>
-  <colstorehidden>F</colstorehidden>
   <colstorewithgroups>F</colstorewithgroups>
-  <coltime>F</coltime>
   <coltransferorder>F</coltransferorder>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>

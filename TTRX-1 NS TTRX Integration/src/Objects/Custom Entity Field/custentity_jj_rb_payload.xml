@@ -1,32 +1,34 @@
 <entitycustomfield scriptid="custentity_jj_rb_payload">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <appliestocontact>F</appliestocontact>
   <appliestocustomer>T</appliestocustomer>
   <appliestoemployee>F</appliestoemployee>
+  <appliestogenericrsrc>F</appliestogenericrsrc>
   <appliestogroup>F</appliestogroup>
   <appliestoothername>F</appliestoothername>
   <appliestopartner>F</appliestopartner>
   <appliestopricelist>F</appliestopricelist>
+  <appliestoproject>F</appliestoproject>
   <appliestoprojecttemplate>F</appliestoprojecttemplate>
   <appliestostatement>F</appliestostatement>
   <appliestovendor>T</appliestovendor>
-  <appliestowebsite>F</appliestowebsite>
   <applyformatting>F</applyformatting>
   <availableexternally>F</availableexternally>
-  <availabletosso>F</availabletosso>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
+  <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXTAREA</fieldtype>
   <globalsearch>F</globalsearch>
-  <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
+  <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>

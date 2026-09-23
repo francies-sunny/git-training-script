@@ -1,6 +1,6 @@
 <itemcustomfield scriptid="custitem_jj_rb_try_result">
   <accesslevel>2</accesslevel>
-  <appliestoexpense>F</appliestoexpense>
+  <aidescription></aidescription>
   <appliestogroup>F</appliestogroup>
   <appliestoinventory>T</appliestoinventory>
   <appliestoitemassembly>T</appliestoitemassembly>
@@ -21,6 +21,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>SELECT</fieldtype>
   <globalsearch>F</globalsearch>
@@ -29,14 +30,13 @@
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>
-  <itemmatrix>F</itemmatrix>
   <itemsubtype>BOTH</itemsubtype>
   <label>RapidBridge Item Last Sync Try Result</label>
   <linktext></linktext>
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <parentsubtab></parentsubtab>
   <searchcomparefield></searchcomparefield>
   <searchdefault></searchdefault>

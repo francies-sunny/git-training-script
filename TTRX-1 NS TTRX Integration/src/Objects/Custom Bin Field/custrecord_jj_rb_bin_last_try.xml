@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_bin_last_try">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -10,6 +11,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>DATETIMETZ</fieldtype>
   <help>Every time this record is evaluated by a sync process, call or no call (v3.1 section 11.5).</help>

@@ -3,6 +3,7 @@
   <coreadminpermission>F</coreadminpermission>
   <custrecord_scm_enable_cpn_on_role>F</custrecord_scm_enable_cpn_on_role>
   <custrecord_scm_enable_elc_on_role>F</custrecord_scm_enable_elc_on_role>
+  <custrecord_scm_enable_itemsub_on_role>F</custrecord_scm_enable_itemsub_on_role>
   <employeerestriction>NONE</employeerestriction>
   <employeeselectionunrestricted>F</employeeselectionunrestricted>
   <isinactive>F</isinactive>
@@ -49,6 +50,10 @@
       <permlevel>EDIT</permlevel>
     </permission>
     <permission>
+      <permkey>LIST_OTHER_ADDRESS</permkey>
+      <permlevel>FULL</permlevel>
+    </permission>
+    <permission>
       <permkey>LIST_BIN</permkey>
       <permlevel>EDIT</permlevel>
     </permission>
@@ -85,16 +90,8 @@
       <permlevel>EDIT</permlevel>
     </permission>
     <permission>
-      <permkey>ADMI_MANAGE_OAUTH_TOKENS</permkey>
-      <permlevel>FULL</permlevel>
-    </permission>
-    <permission>
       <permkey>ADMI_CUSTRECORD</permkey>
       <permlevel>EDIT</permlevel>
-    </permission>
-    <permission>
-      <permkey>ADMI_LOGIN_OAUTH</permkey>
-      <permlevel>FULL</permlevel>
     </permission>
     <permission>
       <permkey>ADMI_LOGIN_OAUTH2</permkey>

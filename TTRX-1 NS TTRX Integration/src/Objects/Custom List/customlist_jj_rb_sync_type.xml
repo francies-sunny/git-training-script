@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_sync_type">
   <description>Which master record this work item is about. Drives reconciliation filters and saved searches.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Sync Type</name>
   <customvalues>

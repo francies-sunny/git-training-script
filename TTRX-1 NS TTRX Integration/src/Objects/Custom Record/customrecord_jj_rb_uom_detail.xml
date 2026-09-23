@@ -1,5 +1,6 @@
 <customrecordtype scriptid="customrecord_jj_rb_uom_detail">
   <accesstype>CUSTRECORDENTRYPERM</accesstype>
+  <aidescription></aidescription>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlinedetaching>T</allowinlinedetaching>
@@ -9,12 +10,10 @@
   <allowquickadd>T</allowquickadd>
   <allowquicksearch>F</allowquicksearch>
   <allowuiaccess>T</allowuiaccess>
-  <customsegment></customsegment>
   <description>Classifies an item into one or more Middleware products, and holds each product UUID, payload hash and sync state. Child of Item. One item can have many UOM Details; each UOM Detail belongs to exactly one item. The Saleable Unit must be unique per item among active rows.</description>
   <enabledle>T</enabledle>
   <enablekeywords>T</enablekeywords>
   <enablemailmerge>F</enablemailmerge>
-  <enablenametranslation>F</enablenametranslation>
   <enablenumbering>F</enablenumbering>
   <enableoptimisticlocking>T</enableoptimisticlocking>
   <enablesystemnotes>T</enablesystemnotes>
@@ -30,7 +29,6 @@
   <numberingmindigits></numberingmindigits>
   <numberingprefix></numberingprefix>
   <numberingsuffix></numberingsuffix>
-  <publicpermissionlevel>NONE</publicpermissionlevel>
   <recordname>RapidBridge UOM Detail</recordname>
   <showcreationdate>F</showcreationdate>
   <showcreationdateonlist>F</showcreationdateonlist>
@@ -44,6 +42,7 @@
   <customrecordcustomfields>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_item">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -84,6 +83,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_unit">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -108,7 +108,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -124,6 +124,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_qty">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -164,6 +165,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_upc">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -204,6 +206,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_gtin">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -244,6 +247,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_gs1_prefix">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -284,6 +288,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_gs1_id">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -324,6 +329,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_ndc">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -364,6 +370,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_pack_size">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -404,6 +411,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_uuid">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -444,13 +452,14 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_payload">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</description>
+      <description>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</description>
       <displayheight></displayheight>
       <displaytype>LOCKED</displaytype>
       <displaywidth></displaywidth>
@@ -459,7 +468,7 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXTAREA</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning "what the destination currently has", or a failed record compares equal on the next save and never syncs again.</help>
+      <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -484,6 +493,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_synced">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -524,6 +534,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_last_sync">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -564,6 +575,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_last_try">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -604,6 +616,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_try_result">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -628,7 +641,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -644,6 +657,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_uom_error">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>

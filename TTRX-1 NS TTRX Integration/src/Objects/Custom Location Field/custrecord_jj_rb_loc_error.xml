@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_loc_error">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -10,6 +11,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXTAREA</fieldtype>
   <help>Last failure reason. Cleared on a later success.</help>

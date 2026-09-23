@@ -1,5 +1,6 @@
 <customrecordtype scriptid="customrecord_jj_rb_config">
   <accesstype>CUSTRECORDENTRYPERM</accesstype>
+  <aidescription></aidescription>
   <allowattachments>F</allowattachments>
   <allowinlinedeleting>F</allowinlinedeleting>
   <allowinlinedetaching>T</allowinlinedetaching>
@@ -9,12 +10,10 @@
   <allowquickadd>T</allowquickadd>
   <allowquicksearch>F</allowquicksearch>
   <allowuiaccess>T</allowuiaccess>
-  <customsegment></customsegment>
   <description>One active row holds the connection and every switch the RapidBridge master-data scripts read. No script parameters and no hardcoded endpoints. Exactly one row may be Active.</description>
   <enabledle>T</enabledle>
   <enablekeywords>T</enablekeywords>
   <enablemailmerge>F</enablemailmerge>
-  <enablenametranslation>F</enablenametranslation>
   <enablenumbering>F</enablenumbering>
   <enableoptimisticlocking>T</enableoptimisticlocking>
   <enablesystemnotes>T</enablesystemnotes>
@@ -30,7 +29,6 @@
   <numberingmindigits></numberingmindigits>
   <numberingprefix></numberingprefix>
   <numberingsuffix></numberingsuffix>
-  <publicpermissionlevel>NONE</publicpermissionlevel>
   <recordname>RapidBridge Configuration</recordname>
   <showcreationdate>F</showcreationdate>
   <showcreationdateonlist>F</showcreationdateonlist>
@@ -44,6 +42,7 @@
   <customrecordcustomfields>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_active">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -84,6 +83,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_subsidiary">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -108,7 +108,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -124,6 +124,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_client_code">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -164,6 +165,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_domain">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -204,6 +206,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_version">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -244,6 +247,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_secret">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -284,6 +288,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_auth_header">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -324,6 +329,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_content_type">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -348,7 +354,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -364,6 +370,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_timeout">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -404,6 +411,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_language">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -444,13 +452,14 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_product_class">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue></defaultvalue>
-      <description>Middleware "type" on a product. Immutable after create, for example Pharmaceutical.</description>
+      <description>Middleware &quot;type&quot; on a product. Immutable after create, for example Pharmaceutical.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
@@ -459,7 +468,7 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXT</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>Middleware "type" on a product. Immutable after create, for example Pharmaceutical.</help>
+      <help>Middleware &quot;type&quot; on a product. Immutable after create, for example Pharmaceutical.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -484,13 +493,14 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_elig_field">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
       <defaultvalue>custitem_jj_rb_eligible</defaultvalue>
-      <description>The field id on the item carrying TrackTrace eligibility, so a client's existing field can be used instead of the shipped one.</description>
+      <description>The field id on the item carrying TrackTrace eligibility, so a client&apos;s existing field can be used instead of the shipped one.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
@@ -499,7 +509,7 @@
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXT</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>The field id on the item carrying TrackTrace eligibility, so a client's existing field can be used instead of the shipped one.</help>
+      <help>The field id on the item carrying TrackTrace eligibility, so a client&apos;s existing field can be used instead of the shipped one.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -524,6 +534,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_max_inline">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -564,6 +575,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_use_dosage">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -604,6 +616,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_use_bins">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -644,6 +657,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_use_address">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -684,6 +698,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_sync_inactive">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -724,6 +739,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_inactive_method">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -764,6 +780,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_stale_minutes">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -804,6 +821,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_max_retries">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -844,6 +862,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_retry_base">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -884,6 +903,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_retry_ceiling">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -924,6 +944,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_retry_max_age">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -964,6 +985,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_capture">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1004,6 +1026,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_payload_cap">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1044,6 +1067,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_redact_pii">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1084,6 +1108,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_killswitch">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1124,6 +1149,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_dryrun">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1164,6 +1190,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_env_label">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1188,7 +1215,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -1204,6 +1231,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_allow_nonprod">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1244,6 +1272,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_po_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1284,6 +1313,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_po_gate">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1324,6 +1354,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_po_approval">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1364,6 +1395,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_so_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1404,6 +1436,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_so_gate">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1444,6 +1477,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_so_approval">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1484,6 +1518,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_ir_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1524,6 +1559,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_if_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1564,6 +1600,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_to_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1604,6 +1641,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_if_status">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1628,7 +1666,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -1644,6 +1682,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_default_bin">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1668,7 +1707,7 @@
       <maxlength></maxlength>
       <maxvalue></maxvalue>
       <minvalue></minvalue>
-      <onparentdelete></onparentdelete>
+      <onparentdelete>NO_ACTION</onparentdelete>
       <parentsubtab></parentsubtab>
       <rolerestrict>F</rolerestrict>
       <searchcomparefield></searchcomparefield>
@@ -1684,6 +1723,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_storage_area">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1724,6 +1764,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_held_hours">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1764,6 +1805,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_close_action">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1804,6 +1846,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_poll_enabled">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1844,6 +1887,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_poll_window">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1884,6 +1928,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_watermark">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1924,6 +1969,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_transfer">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>
@@ -1964,6 +2010,7 @@
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_cross_sub_only">
       <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
       <allowquickadd>F</allowquickadd>
       <applyformatting>F</applyformatting>
       <checkspelling>F</checkspelling>

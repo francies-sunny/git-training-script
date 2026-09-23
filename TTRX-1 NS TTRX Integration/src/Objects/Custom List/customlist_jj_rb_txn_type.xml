@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_txn_type">
   <description>The transaction dimension used by the flow configuration and the dispatch table. Phase 1 values only. Phase 2 adds Transfer Order, Return Authorization, Vendor Return and Inter-Company Transfer. Inventory Adjustment is never an outbound trigger.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Transaction Type</name>
   <customvalues>

@@ -1,19 +1,20 @@
 <entitycustomfield scriptid="custentity_jj_rb_last_try">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <appliestocontact>F</appliestocontact>
   <appliestocustomer>T</appliestocustomer>
   <appliestoemployee>F</appliestoemployee>
+  <appliestogenericrsrc>F</appliestogenericrsrc>
   <appliestogroup>F</appliestogroup>
   <appliestoothername>F</appliestoothername>
   <appliestopartner>F</appliestopartner>
   <appliestopricelist>F</appliestopricelist>
+  <appliestoproject>F</appliestoproject>
   <appliestoprojecttemplate>F</appliestoprojecttemplate>
   <appliestostatement>F</appliestostatement>
   <appliestovendor>T</appliestovendor>
-  <appliestowebsite>F</appliestowebsite>
   <applyformatting>F</applyformatting>
   <availableexternally>F</availableexternally>
-  <availabletosso>F</availabletosso>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
@@ -23,6 +24,7 @@
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>DATETIMETZ</fieldtype>
   <globalsearch>F</globalsearch>

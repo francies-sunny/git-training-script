@@ -1,5 +1,6 @@
 <othercustomfield scriptid="custrecord_jj_rb_bin_props">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
@@ -10,6 +11,7 @@
   <displaytype>NORMAL</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>MULTISELECT</fieldtype>
   <help>Storage conditions for this bin. Sent to the Middleware semicolon-separated as properties: COLD, FROZEN, RESTRICTED_ACCESS.</help>
@@ -20,7 +22,7 @@
   <maxlength></maxlength>
   <maxvalue></maxvalue>
   <minvalue></minvalue>
-  <onparentdelete></onparentdelete>
+  <onparentdelete>NO_ACTION</onparentdelete>
   <rectype>-242</rectype>
   <searchcomparefield></searchcomparefield>
   <searchdefault></searchdefault>

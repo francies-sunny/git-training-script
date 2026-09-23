@@ -1,6 +1,9 @@
 <transactionbodycustomfield scriptid="custbody_jj_rb_scan_session">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
+  <bodyassemblybuild>F</bodyassemblybuild>
+  <bodybom>F</bodybom>
   <bodycustomerpayment>F</bodycustomerpayment>
   <bodydeposit>F</bodydeposit>
   <bodydepositapplication>F</bodydepositapplication>
@@ -19,23 +22,23 @@
   <bodyprintstatement>F</bodyprintstatement>
   <bodypurchase>T</bodypurchase>
   <bodysale>T</bodysale>
-  <bodystore>F</bodystore>
   <bodytransferorder>T</bodytransferorder>
   <bodyvendorpayment>F</bodyvendorpayment>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>The Middleware's scan session identifier. Audit, and the link back to what was physically scanned.</description>
+  <description>The Middleware&apos;s scan session identifier. Audit, and the link back to what was physically scanned.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>TEXT</fieldtype>
   <fldsizelabel></fldsizelabel>
   <globalsearch>F</globalsearch>
-  <help>The Middleware's scan session identifier. Audit, and the link back to what was physically scanned.</help>
+  <help>The Middleware&apos;s scan session identifier. Audit, and the link back to what was physically scanned.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>

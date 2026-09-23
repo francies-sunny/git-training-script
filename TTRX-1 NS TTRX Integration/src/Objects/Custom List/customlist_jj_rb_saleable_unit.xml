@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_saleable_unit">
   <description>The unit a UOM Detail represents. This is the value that must be unique per item among active rows.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Saleable Unit</name>
   <customvalues>

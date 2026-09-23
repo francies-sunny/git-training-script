@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_recon_reason">
   <description>Why a record appears on the reconciliation page. The single most useful field for the user.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Recon Reason</name>
   <customvalues>

@@ -1,6 +1,9 @@
 <transactionbodycustomfield scriptid="custbody_jj_rb_all_serial">
   <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
   <applyformatting>F</applyformatting>
+  <bodyassemblybuild>F</bodyassemblybuild>
+  <bodybom>F</bodybom>
   <bodycustomerpayment>F</bodycustomerpayment>
   <bodydeposit>F</bodydeposit>
   <bodydepositapplication>F</bodydepositapplication>
@@ -19,23 +22,23 @@
   <bodyprintstatement>F</bodyprintstatement>
   <bodypurchase>T</bodypurchase>
   <bodysale>T</bodysale>
-  <bodystore>F</bodystore>
   <bodytransferorder>T</bodytransferorder>
   <bodyvendorpayment>F</bodyvendorpayment>
   <checkspelling>F</checkspelling>
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>Roll-up maintained in beforeSubmit: true when every line is a trackable, serialized item. Deliberately NOT in the sync-control field list, because a change to it is a change to the order's classification and must re-trigger the sync.</description>
+  <description>Roll-up maintained in beforeSubmit: true when every line is a trackable, serialized item. Deliberately NOT in the sync-control field list, because a change to it is a change to the order&apos;s classification and must re-trigger the sync.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
   <fieldtype>CHECKBOX</fieldtype>
   <fldsizelabel></fldsizelabel>
   <globalsearch>F</globalsearch>
-  <help>Roll-up maintained in beforeSubmit: true when every line is a trackable, serialized item. Deliberately NOT in the sync-control field list, because a change to it is a change to the order's classification and must re-trigger the sync.</help>
+  <help>Roll-up maintained in beforeSubmit: true when every line is a trackable, serialized item. Deliberately NOT in the sync-control field list, because a change to it is a change to the order&apos;s classification and must re-trigger the sync.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>

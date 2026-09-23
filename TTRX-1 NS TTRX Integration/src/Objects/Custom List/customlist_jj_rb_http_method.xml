@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_http_method">
   <description>Recorded on each attempt for support.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge HTTP Method</name>
   <customvalues>

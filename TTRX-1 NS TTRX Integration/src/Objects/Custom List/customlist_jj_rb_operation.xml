@@ -1,7 +1,6 @@
 <customlist scriptid="customlist_jj_rb_operation">
   <description>What was asked of the Middleware.</description>
   <isinactive>F</isinactive>
-  <ismatrixoption>F</ismatrixoption>
   <isordered>T</isordered>
   <name>RapidBridge Sync Operation</name>
   <customvalues>
