@@ -51,7 +51,25 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       return (v === undefined || v === null) ? '' : String(v);
     };
     /** '' collapses to undefined so canonical() drops it — a blank is not a value. */
-    const orNothing = (v) => (util.blank(v) ? undefined : v);
+    /**
+     * RETIRED. It collapsed a blank to undefined, and undefined was then dropped
+     * by both the canonical renderer and the form encoder, so the key vanished
+     * from the payload entirely. The Middleware contract is a FIXED KEY SET: an
+     * absent key is not the same as an empty one.
+     *
+     * Kept only so nothing outside the builders breaks; no builder uses it.
+     */
+    // const orNothing = (v) => (util.blank(v) ? undefined : v);
+
+    /**
+     * The replacement. Every payload value goes through this: a blank becomes an
+     * empty string and the key stays in the payload, exactly as the reference
+     * client sends it.
+     */
+    const txt = (v) => {
+      const t = textOf(v);
+      return (t === undefined || t === null) ? '' : String(t);
+    };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Sync units
@@ -266,10 +284,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      */
     const buildDosageForm = (unit, cfg, entry) => {
       const f = entry.fields;
+      // Reference payload: code, name. is_active is NEW — required so an
+      // inactivated dosage form can be expressed without deleting it.
       return {
-        code: textOf(unit.data[f.code]),         // the identity. Immutable.
-        name: textOf(unit.data.name),
-        is_active: !util.truthy(unit.data.isinactive)
+        code: txt(unit.data[f.code]),            // the identity. Immutable.
+        name: txt(unit.data.name),
+        is_active: !util.truthy(unit.data.isinactive)      // NEW
       };
     };
 
@@ -280,26 +300,29 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     const buildLocation = (unit, cfg, entry) => {
       const f = entry.fields;
       const d = unit.data;
+
+      // The FULL reference key set, in the reference order. Every key is always
+      // present; a value the account does not hold goes out empty, never absent.
       const payload = {
-        custom_uuid: textOf(unit.storedUuid),
-        name: textOf(d.name),
-        gs1_id: orNothing(textOf(d[f.gs1Id])),
-        gs1_sgln: orNothing(textOf(d[f.sgln])),
-        parent_location_uuid: orNothing(unit.parentUuid),
-        location_detail: orNothing(textOf(d[f.locationType])),
+        custom_uuid: txt(unit.storedUuid),
+        name: txt(d.name),
+        gs1_id: txt(d[f.gs1Id]),
+        gs1_sgln: txt(d[f.sgln]),
+        parent_location_uuid: txt(unit.parentUuid),
+        location_detail: txt(d[f.locationType]),
         is_unselectable_location: false,
         manufacturing_location_prefix_or_suffix_id_value: '',
-        location_lat: orNothing(d[f.latitude]),
-        location_long: orNothing(d[f.longitude]),
-        is_active: !util.truthy(d.isinactive)
+        location_lat: txt(d[f.latitude]),
+        location_long: txt(d[f.longitude]),
+        is_active: !util.truthy(d.isinactive),
+
+        // The reference build sends this as true unconditionally. Here the KEY
+        // is always sent and only the VALUE is conditional: a default storage
+        // area is wanted on create, and only when the account is not on Bin
+        // Management — with real bins it would create a second, unmanaged
+        // storage area alongside them.
+        create_default_storage_area: (!unit.storedUuid && cfg.useBins !== true)
       };
-
-      log.debug("RB buildLocation payload: ", JSON.stringify(payload));
-
-      // On create only, and only where the account has no bins. An account on
-      // Bin Management gets its storage areas from real bins, so asking for a
-      // default one would create a second, unmanaged storage area.
-      if (!unit.storedUuid && !cfg.useBins) payload.create_default_storage_area = true;
 
       const addr = locationAddresses(unit);
       if (addr.length) payload[util.COMPARE_KEY] = { addresses: addr.map(compareAddr) };
@@ -315,25 +338,57 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const f = entry.fields;
       const d = unit.data;
       const isPerson = util.truthy(d.isperson);
-      const name = (isPerson ? textOf(d.altname) : textOf(d.companyname)) || textOf(d.entityid);
+      const name = (isPerson ? txt(d.altname) : txt(d.companyname)) || txt(d.entityid);
 
+      // The FULL reference trading-partner key set. Customer and Vendor differ
+      // by the `type` value alone. Everything the account does not supply is
+      // sent empty; nothing is omitted.
       const payload = {
-        type: entry.partnerType,                    // CUSTOMER | VENDOR
+        custom_uuid: txt(unit.storedUuid),
         name: name,
-        is_active: !util.truthy(d.isinactive),
-        // The existing client code hardcodes ALL, subscribing every partner to
-        // every notification. Default NONE; it is a configuration value, not a
-        // property of the partner.
+        gs1_id: txt(d[f.gln]),
+        gs1_company_id: '',
+        gs1_sgln: '',
+        type: entry.partnerType,                    // CUSTOMER | VENDOR
+        parent_tp_uuid: '',
+        customer_id: txt(d.entityid),
+        friendly_name: '',
+        default_billing_address_uuid: '',
+        default_shipping_address_uuid: '',
+        phone: txt(d.phone),
+        phone_ext: '',
+        notification_email: txt(d.email),
+        // The reference build hardcodes ALL, subscribing every partner to every
+        // notification. NONE is a configuration decision, not a property of the
+        // partner, so it is the safer default.
         new_trx_notification_type: 'NONE',
+        flag_notification_name: '',
+        flag_notification_email: '',
+        flag_notification_phone: '',
+        flag_notification_phone_ext: '',
+        // NEW value for an existing key: the reference sends this empty. The
+        // NetSuite internal id makes the remote object traceable back.
         external_reference: String(unit.recordId),
-        phone: orNothing(textOf(d.phone)),
-        notification_email: orNothing(textOf(d.email)),
-        gs1_id: orNothing(textOf(d[f.gln]))
+        is_active: !util.truthy(d.isinactive),
+        inbound_shipping_check_percentage: '',
+        outbound_shipping_check_percentage: '',
+        sender_id: '',
+        receiver_id: '',
+        as2_id: '',
+        is_a_3pl_client: false,
+        '3pl_is_our_company_is_internal_entity_of_tp': false,
+        is_send_outbond_epcis: false,
+        is_send_outbond_x12: false,
+        default_outbound_transaction_type: 'SALES',
+        send_copy_outbound_shipment_external_trading_entity_id: '',
+        outbound_epcis_generator_type: '',
+        is_enable_transmit_outbound_850: '',
+        omit_comm_aggr_in_epcis: false
       };
 
-      // The idempotency key. Create only — it lets the Middleware upsert if our
-      // response is lost, and re-sending it on an update means nothing.
-      log.debug("RB buildPartner payload: ", JSON.stringify(payload));
+      // The idempotency key is generated on CREATE only — it lets the
+      // Middleware recognise a repeat if our response is lost. On an update the
+      // key still has to be present, and it carries the UUID we already hold.
       if (!unit.storedUuid) payload.custom_uuid = util.uuid();
 
       const addrs = entityAddresses(unit);
@@ -351,51 +406,75 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const d = unit.data;
       const u = unit.uom;
       const inactive = util.truthy(d.isinactive);
+      const isLeaf = Number(u.qty) === 1;
 
+      // The FULL reference product key set. One product per active UOM Detail
+      // row; the identity half comes from the row, the shared half from the item.
       const payload = {
-        status: inactive ? 'RETIRED' : 'AVAILABLE',
-        is_active: !inactive,
-        sku: orNothing(textOf(d.itemid)),
+        custom_uuid: txt(unit.storedUuid),
+        // `type` is immutable after create, but the key is still sent on every
+        // call so the body keeps its shape.
+        type: txt(cfg.productClassText || cfg.productClass) || 'Pharmaceutical',
 
+        gs1_company_prefix: txt(u.gs1Prefix),
+        gs1_id: txt(u.gs1Id),
+        upc: txt(u.upc) || txt(d.upccode),
+        // The reference build puts the NDC in `sku`. The item id is the SKU a
+        // NetSuite user recognises, so it is sent here instead; the NDC travels
+        // in product_identifiers where it belongs. CONFIRM with TrackTraceRX
+        // before go-live if they key on sku.
+        sku: txt(d.itemid),
+        type_class: '',
+        category_id: '',
+        status: inactive ? 'RETIRED' : 'AVAILABLE',
+        manufacturer_id: '',
+        manufacturer_default_address_uuid: '',
+        is_active: !inactive,
+
+        update_product_descriptions: true,
         product_descriptions: [{
-          language_code: cfg.language || 'en',
-          name: textOf(d.displayname) || textOf(d.itemid),
-          description: textOf(d.salesdescription) || textOf(d.displayname) ||
-            textOf(d.itemid)
+          language_code: txt(cfg.language) || 'en',
+          name: txt(d.displayname) || txt(d.itemid),
+          description: txt(d.salesdescription) || txt(d.displayname) || txt(d.itemid),
+          composition: '',
+          product_long_name: txt(d.salesdescription)
         }],
 
-        // identity — from the UOM row
-        upc: orNothing(u.upc || textOf(d.upccode)),
-        gtin14: orNothing(u.gtin),
-        gs1_company_prefix: orNothing(u.gs1Prefix),
-        gs1_id: orNothing(u.gs1Id),
-        pack_size: orNothing(u.packSize),
-        is_leaf_product: Number(u.qty) === 1,
+        // Always present, even when the row has no NDC — the reference build
+        // sends the block with an empty value rather than dropping it.
+        update_product_identifiers: !util.blank(u.ndc),
+        product_identifiers: [{ identifier_code: 'US_NDC', value: txt(u.ndc) }],
 
-        // pharma
-        class_pharmaceutical__dosage_form: orNothing(unit.dosageCode),
-        class_pharmaceutical__strength: orNothing(textOf(d[f.strength])),
-        class_pharmaceutical__generic_name: orNothing(textOf(d[f.generic]))
+        pack_size: txt(u.packSize),
+        // NEW key. The reference build resolved this from a hardcoded map of
+        // NetSuite unit internal ids, which cannot survive a second account.
+        // Sent empty until a configurable unit mapping is agreed.
+        pack_size_type_id: '',
+
+        update_requirements: false,
+        update_packaging: false,
+
+        class_pharmaceutical__strength: txt(d[f.strength]),
+        class_pharmaceutical__dosage_form: txt(unit.dosageCode),
+        class_pharmaceutical__generic_name: txt(d[f.generic]),
+
+        is_leaf_product: isLeaf,
+        is_override_products_packaging_type_validation: false,
+        gtin14: txt(u.gtin),
+        // NEW key, carried for parity with the reference build. The packaging
+        // hierarchy is not built in this phase — the reference builder threw
+        // on an undefined identifier, so it never transmitted either.
+        composition: ''
       };
 
-      if (!util.blank(u.ndc))
-        payload.product_identifiers = [{ identifier_code: 'US_NDC', value: u.ndc }];
-
+      // NEW keys. Bin state is only claimed when the account feature, the
+      // configuration flag and the item checkbox all agree; the feature state is
+      // reported separately so the Middleware can tell "not bin managed" from
+      // "bins not available".
       Object.assign(payload, binState(d, cfg));
 
       if (!unit.storedUuid) {
-        // Create only. `type` is immutable after create — a change to the
-        // product class is a business decision, not a PUT.
-        payload.type = cfg.productClassText || cfg.productClass || 'Pharmaceutical';
         payload.custom_uuid = util.uuid();
-      } else {
-        // §8.5 — PUT is a FULL REPLACEMENT and needs explicit gate booleans.
-        // Forget them and the call returns 200 and changes nothing: a silent
-        // data-loss bug.
-        payload.update_product_descriptions = !!payload.product_descriptions;
-        payload.update_product_identifiers = !!payload.product_identifiers;
-        payload.update_requirements = false;
-        payload.update_packaging = false;
       }
 
       return payload;
@@ -424,20 +503,33 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * `state_id` must be an id: free text where an id is expected fails silently.
      */
     const buildAddress = (addr, cfg, parentName) => {
+      // The FULL reference address key set. Every key always present.
       const body = {
-        address_nickname: addr.nickname || 'Main Address',
-        recipient_name: addr.addressee || parentName || '',
-        line1: addr.addr1 || '',
-        line2: orNothing(addr.addr2),
-        city: addr.city || '',
-        zip: addr.zip || '',
-        country_code: addr.country || '',
-        phone: orNothing(addr.phone),
-        gs1_sgln: orNothing(addr.sgln),
+        address_nickname: txt(addr.nickname) || 'Main Address',
+        // NEW key on the NetSuite side: there is no address-level GS1 Id field
+        // yet, so it is sent empty. Add a custom field on the Address subrecord
+        // if TrackTraceRX requires a value.
+        address_gs1_id: '',
+        gs1_sgln: txt(addr.sgln),
+        recipient_name: txt(addr.addressee) || txt(parentName),
+        line1: txt(addr.addr1),
+        line2: txt(addr.addr2),
+        country_code: txt(addr.country),
+        // The reference build sends the state as free text. It is kept for
+        // contract parity.
+        state: txt(addr.state),
+        city: txt(addr.city),
+        zip: txt(addr.zip),
+        phone: txt(addr.phone),
         is_licence_required: false
       };
+
+      // NEW key. The Middleware's own state list resolved from the country, so
+      // a state is identified rather than spelled. Sent empty when the country
+      // or the state cannot be matched — never guessed, never omitted.
       const stateId = resolveStateId(addr.country, addr.state, cfg);
-      if (stateId) body.state_id = stateId;     // omitted, never free text
+      body.state_id = (stateId === null || stateId === undefined) ? '' : stateId;
+
       return body;
     };
 
@@ -1065,50 +1157,76 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     };
 
     const syncLocationStorageArea = (entry, unit, cfg, locationUuid) => {
-      log.debug("Sync Location Storage Area", { details: { locationUuid: locationUuid } });
       const fieldId = C.MASTER.location.fields.storageAreaUuid;
-      // if (!fieldId || !cfg || cfg.useBins === true) return;
-      if (!fieldId || !cfg) return;
+
+      // The guard is restored. It must agree with the payload: the default
+      // storage area is only requested when the account is NOT on Bin
+      // Management, so there is nothing to read back when it is. Reading and
+      // saving one anyway would point the Location at a storage area that
+      // competes with its real bins.
+      if (!fieldId || !cfg || cfg.useBins === true) return;
+      if (util.blank(locationUuid)) return;
+
+      log.debug({
+        title: 'RB storage area lookup ' + unit.recordType + '/' + unit.recordId,
+        details: { locationUuid: locationUuid }
+      });
 
       try {
+        // The real call. The test stub that returned TEST-STORAGE-AREA-UUID-001
+        // has been removed — it wrote a fake identifier onto live records.
+        const storageAreaCall = client.call({
+          entry: entry,
+          unit: unit,
+          cfg: cfg,
+          target: { mode: 'MAIN' },
+          endpoint: C.EP.STORAGE_AREAS,
+          pathParams: { uuid: locationUuid },
+          body: undefined,
+          operation: C.OPERATION.QUERY,
+          payload: '',
+          trigger: C.TRIGGER.INITIAL,
+          correlation: util.uuid(),
+          requestUuid: util.uuid()
+        });
 
-        const TEST_STORAGE_AREA_ERROR = false;
-        const storageAreaCall = TEST_STORAGE_AREA_ERROR
-          ? { status: 400, body: { error: true, message: 'Test Storage Area API error' } }
-          : { status: 200, body: { data: [{ uuid: 'TEST-STORAGE-AREA-UUID-001' }] } };
-
-        // const storageAreaCall = client.call({
-        //   entry: entry,
-        //   unit: unit,
-        //   cfg: cfg,
-        //   target: { mode: 'MAIN' },
-        //   endpoint: C.EP.STORAGE_AREAS,
-        //   pathParams: { uuid: locationUuid },
-        //   body: undefined,
-        //   operation: C.OPERATION.QUERY,
-        //   payload: '',
-        //   trigger: C.TRIGGER.INITIAL,
-        //   correlation: util.uuid(),
-        //   requestUuid: util.uuid()
-        // });
-
-        log.debug("Storage Area Call Result", { details: storageAreaCall });
-
-        const data = storageAreaCall && storageAreaCall.body && storageAreaCall.body.data;
-        const storageAreaUuid = Array.isArray(data) && data.length
-          ? (data[0].uuid || data[0].id || data[0].storage_area_uuid || null)
-          : null;
-
-        if (storageAreaUuid) {
-          record.submitFields({
-            type: unit.recordType,
-            id: unit.recordId,
-            values: { [fieldId]: storageAreaUuid },
-            options: { ignoreMandatoryFields: true }
+        if (!storageAreaCall || !storageAreaCall.ok) {
+          // Not fatal to the Location sync, which already succeeded. Record it
+          // and move on rather than failing a work item that is closed.
+          log.audit({
+            title: 'RB storage area lookup did not return a result',
+            details: {
+              recordId: unit.recordId, locationUuid: locationUuid,
+              httpStatus: storageAreaCall && storageAreaCall.httpStatus,
+              error: storageAreaCall && storageAreaCall.errorMessage
+            }
           });
+          return;
         }
+
+        const body = storageAreaCall.body || {};
+        const rows = Array.isArray(body) ? body
+          : (Array.isArray(body.data) ? body.data
+            : (Array.isArray(body.storage_areas) ? body.storage_areas : []));
+
+        const first = rows.length ? rows[0] : null;
+        const storageAreaUuid = first
+          ? (first.uuid || first.id || first.storage_area_uuid || null) : null;
+
+        log.debug({
+          title: 'RB storage area resolved',
+          details: { returned: rows.length, storageAreaUuid: storageAreaUuid }
+        });
+
+        if (!storageAreaUuid) return;
+
+        record.submitFields({
+          type: unit.recordType,
+          id: unit.recordId,
+          values: { [fieldId]: storageAreaUuid },
+          options: { ignoreMandatoryFields: true }
+        });
       } catch (e) {
-        log.error("Error @ syncLocationStorageArea: ", e);
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1458,16 +1576,48 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /** Fields a user legitimately edits. Everything else of ours is locked. */
     const USER_OWNED = {
-      code: 1, isDefault: 1, sgln: 1, holdBin: 1, goodBin: 1, props: 1,
-      eligible: 1, dosage: 1, strength: 1, generic: 1, gln: 1,
+      // Dosage Form
+      code: 1, isDefault: 1,
+      // Location — our own fields
+      sgln: 1, gs1Id: 1, holdBin: 1, goodBin: 1,
+      // Location — NATIVE NetSuite fields read into the payload. They are
+      // listed here for documentation; the nativeField guard below is what
+      // actually protects them, and it protects any future one for free.
+      locationType: 1, latitude: 1, longitude: 1,
+      // Bin
+      props: 1,
+      // Item
+      eligible: 1, dosage: 1, strength: 1, generic: 1,
+      // Customer / Vendor
+      gln: 1,
+      // UOM Detail — every value on the row is entered by a user
       item: 1, unit: 1, qty: 1, upc: 1, gtin: 1, ndc: 1,
-      gs1Prefix: 1, gs1Id: 1, packSize: 1
+      gs1Prefix: 1, packSize: 1
     };
+
+    /**
+     * ENGINE-OWNED, locked on every form: uuid, payload, synced, lastSync,
+     * lastTry, tryResult, error, attention, storageAreaUuid. Nothing else.
+     */
+
+    /**
+     * A dispatch entry may map a NATIVE NetSuite field — Location reads
+     * locationtype, latitude and longitude straight off the record. Those are
+     * the user's fields, not ours, and locking one would stop a NetSuite user
+     * maintaining their own data.
+     *
+     * Everything the SuiteApp owns is a custom field, so the test is simply
+     * whether the id is one of ours. This holds for any native field a future
+     * builder reads, without anyone having to remember to update USER_OWNED.
+     */
+    const OURS = /^(custrecord|custentity|custitem|custcol|custbody)_/i;
+    const isOurField = (fieldId) => OURS.test(String(fieldId || ''));
 
     const lockSyncFields = (form, entry) => {
       if (!form || !entry || !entry.fields) return;
       Object.keys(entry.fields).forEach((k) => {
         if (USER_OWNED[k]) return;
+        if (!isOurField(entry.fields[k])) return;     // never lock a native field
         try {
           const fld = form.getField({ id: entry.fields[k] });
           if (fld) fld.updateDisplayType({ displayType: 'inline' });
@@ -1478,7 +1628,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     /** COPY — a copy has synced nothing. §11.9. */
     const clearAllSyncFields = (newRecord, entry) => {
       if (!newRecord || !entry || !entry.fields) return;
-      ['uuid', 'payload', 'synced', 'lastSync', 'lastTry', 'tryResult', 'error', 'attention']
+      // storageAreaUuid belongs here too: a copied Location would otherwise
+      // inherit the source location's remote storage area and point at it.
+      ['uuid', 'payload', 'synced', 'lastSync', 'lastTry', 'tryResult', 'error',
+        'attention', 'storageAreaUuid']
         .forEach((k) => {
           const fid = entry.fields[k];
           if (!fid) return;

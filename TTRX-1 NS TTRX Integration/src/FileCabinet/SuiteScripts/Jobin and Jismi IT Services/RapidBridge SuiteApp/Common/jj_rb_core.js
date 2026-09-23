@@ -246,8 +246,13 @@ define(['N/search'],
           lastTry: 'custrecord_jj_rb_loc_last_try',
           tryResult: 'custrecord_jj_rb_loc_try_result',
           error: 'custrecord_jj_rb_loc_error', sgln: 'custrecord_jj_rb_loc_sgln',
-          // gs1Id: 'custrecord_jj_rb_loc_gs1_id',
-          // locationType: 'locationtype', latitude: 'latitude', longitude: 'longitude',
+          // Restored. buildLocation reads all four; while they were commented
+          // out every one of them resolved to undefined and the keys vanished
+          // from the payload.
+          gs1Id: 'custrecord_jj_rb_loc_gs1_id',
+          locationType: 'locationtype',
+          latitude: 'latitude',
+          longitude: 'longitude',
           storageAreaUuid: 'custrecord_jj_rb_storage_area_uuid',
           holdBin: 'custrecord_jj_rb_loc_onhold_bin',
           goodBin: 'custrecord_jj_rb_loc_good_bin'
@@ -405,11 +410,15 @@ define(['N/search'],
      * on key order and every save becomes an API call.
      */
     const canonical = (v) => {
-      if (v === null || v === undefined) return '';
+      if (v === null || v === undefined) return '""';
       if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
       if (typeof v === 'object') {
+        // EVERY key is kept, including the empty ones. The Middleware contract
+        // is a fixed key set: a payload that silently loses its blank keys is
+        // not the same payload, and the stored comparison has to be a
+        // comparison of what was actually sent. Filtering them out here is what
+        // made the stored payload disagree with the wire.
         return '{' + Object.keys(v).sort()
-          .filter((k) => v[k] !== undefined && v[k] !== null)
           .map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
       }
       if (typeof v === 'boolean' || typeof v === 'number') return JSON.stringify(v);
@@ -439,11 +448,15 @@ define(['N/search'],
      * accepts with a 200 and stores as garbage.
      */
     const formEncode = (obj) => Object.keys(obj)
-      .filter((k) => obj[k] !== undefined && obj[k] !== null)
       .map((k) => {
         const v = obj[k];
-        const scalar = (typeof v === 'object') ? JSON.stringify(v)
-          : (typeof v === 'boolean') ? String(v) : v;
+        // No filtering. The reference client encodes every key of the body and
+        // the Middleware expects the full, fixed key set — an omitted key is
+        // not the same as an empty one. undefined and null go on the wire as an
+        // empty value, exactly as the reference build does.
+        const scalar = (v === undefined || v === null) ? ''
+          : (typeof v === 'object') ? JSON.stringify(v)
+            : (typeof v === 'boolean') ? String(v) : v;
         return encodeURIComponent(k) + '=' + encodeURIComponent(scalar);
       })
       .join('&');
