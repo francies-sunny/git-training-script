@@ -80,6 +80,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     const resolveUnits = (entry, recordId, recordType, cfg, o) => {
       if (entry.key === 'ITEM') return resolveItemUnits(entry, recordId, recordType, cfg, o);
 
+      log.debug("Resolving unit for " + entry.key + "/" + recordType + "/" + recordId);
+
       const f = entry.fields || {};
       const unit = Object.assign({
         recordType: recordType,
@@ -91,10 +93,45 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         data: {}
       }, unitFields(f));
 
+      if (entry.key === 'LOCATION') {
+        const locationFields = dedupe(
+          Object.keys(f)
+            .filter((key) => f[key])
+            .map((key) => f[key])
+            .concat(['name', 'isinactive', 'parent', 'subsidiary'])
+        );
+
+        try {
+          const locationRecord = record.load({
+            type: recordType,
+            id: recordId,
+            isDynamic: false
+          });
+          const vals = {};
+
+          locationFields.forEach((fieldId) => {
+            vals[fieldId] = locationRecord.getValue({ fieldId: fieldId });
+          });
+
+          unit.storedUuid = f.uuid ? textOf(vals[f.uuid]) : null;
+          unit.storedPayload = f.payload ? textOf(vals[f.payload]) : null;
+          unit.storedSynced = f.synced ? util.truthy(vals[f.synced]) : false;
+          unit.data = vals;
+          unit.sourceRecord = locationRecord;
+          return { list: [unit] };
+        } catch (e) {
+          log.error('Error @ resolveUnits location load: ' + recordType + '/' + recordId, e);
+          return {
+            list: [],
+            blocked: 'Location ' + recordId +
+              ' could not be read: ' + e.message
+          };
+        }
+      }
+
       const cols = [];
       Object.keys(f).forEach((k) => { if (f[k]) cols.push(f[k]); });
       if (entry.key === 'DOSAGE') cols.push('name', 'isinactive');
-      if (entry.key === 'LOCATION') cols.push('name', 'isinactive', 'parent', 'subsidiary');
       if (entry.key === 'CUSTOMER' || entry.key === 'VENDOR')
         cols.push('entityid', 'companyname', 'isinactive', 'phone', 'email', 'isperson', 'altname');
 
@@ -102,6 +139,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         vals = search.lookupFields({ type: recordType, id: recordId, columns: dedupe(cols) });
       } catch (e) {
+        log.error("Error @ resolveUnits: ", e);
         return {
           list: [], blocked: 'Record ' + recordType + '/' + recordId +
             ' could not be read: ' + e.message
@@ -139,6 +177,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           columns: dedupe(itemCols.filter(Boolean))
         });
       } catch (e) {
+        log.error("Error @ resolveUnits: ", e);
         return {
           list: [], blocked: 'Item ' + itemType + '/' + itemId +
             ' could not be read: ' + e.message
@@ -240,13 +279,22 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      */
     const buildLocation = (unit, cfg, entry) => {
       const f = entry.fields;
+      const d = unit.data;
       const payload = {
-        name: textOf(unit.data.name),
-        is_active: !util.truthy(unit.data.isinactive),
+        custom_uuid: textOf(unit.storedUuid),
+        name: textOf(d.name),
+        gs1_id: orNothing(textOf(d[f.gs1Id])),
+        gs1_sgln: orNothing(textOf(d[f.sgln])),
+        parent_location_uuid: orNothing(unit.parentUuid),
+        location_detail: orNothing(textOf(d[f.locationType])),
         is_unselectable_location: false,
-        gs1_sgln: orNothing(textOf(unit.data[f.sgln])),
-        parent_location_uuid: orNothing(unit.parentUuid)
+        manufacturing_location_prefix_or_suffix_id_value: '',
+        location_lat: orNothing(d[f.latitude]),
+        location_long: orNothing(d[f.longitude]),
+        is_active: !util.truthy(d.isinactive)
       };
+
+      log.debug("RB buildLocation payload: ", JSON.stringify(payload));
 
       // On create only, and only where the account has no bins. An account on
       // Bin Management gets its storage areas from real bins, so asking for a
@@ -285,6 +333,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
       // The idempotency key. Create only — it lets the Middleware upsert if our
       // response is lost, and re-sending it on an update means nothing.
+      log.debug("RB buildPartner payload: ", JSON.stringify(payload));
       if (!unit.storedUuid) payload.custom_uuid = util.uuid();
 
       const addrs = entityAddresses(unit);
@@ -680,8 +729,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           trigger: trigger, correlation: correlation, requestUuid: correlation
         });
 
-        if (res.ok) {                                                    // step 7
-          writeBackSuccess(entry, unit, res.uuid || unit.storedUuid, payloadStr);
+        if (res.ok) {
+          log.debug("Call For Write Back Success", { details: { uuid: res.uuid || unit.storedUuid } });                                            // step 7
+          writeBackSuccess(entry, unit, res.uuid || unit.storedUuid, payloadStr, cfg);
           logIo.closeSuccess(target, res);
           results.push({ ok: true, uuid: res.uuid || unit.storedUuid });
 
@@ -744,7 +794,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         const v = search.lookupFields({ type: C.REC.UOM, id: uomRowId, columns: [U.item] });
         itemId = textOf(v[U.item]);
-      } catch (e) { /* fall through */ }
+      } catch (e) {
+        log.debug("Error @ runUomRow: ", e);
+        /* fall through */
+      }
 
       if (!itemId) {
         logIo.exception(C.MASTER.customrecord_jj_rb_uom_detail,
@@ -1011,7 +1064,57 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       }
     };
 
-    const writeBackSuccess = (entry, unit, uuid, payloadStr) => {
+    const syncLocationStorageArea = (entry, unit, cfg, locationUuid) => {
+      log.debug("Sync Location Storage Area", { details: { locationUuid: locationUuid } });
+      const fieldId = C.MASTER.location.fields.storageAreaUuid;
+      // if (!fieldId || !cfg || cfg.useBins === true) return;
+      if (!fieldId || !cfg) return;
+
+      try {
+
+        const TEST_STORAGE_AREA_ERROR = false;
+        const storageAreaCall = TEST_STORAGE_AREA_ERROR
+          ? { status: 400, body: { error: true, message: 'Test Storage Area API error' } }
+          : { status: 200, body: { data: [{ uuid: 'TEST-STORAGE-AREA-UUID-001' }] } };
+
+        // const storageAreaCall = client.call({
+        //   entry: entry,
+        //   unit: unit,
+        //   cfg: cfg,
+        //   target: { mode: 'MAIN' },
+        //   endpoint: C.EP.STORAGE_AREAS,
+        //   pathParams: { uuid: locationUuid },
+        //   body: undefined,
+        //   operation: C.OPERATION.QUERY,
+        //   payload: '',
+        //   trigger: C.TRIGGER.INITIAL,
+        //   correlation: util.uuid(),
+        //   requestUuid: util.uuid()
+        // });
+
+        log.debug("Storage Area Call Result", { details: storageAreaCall });
+
+        const data = storageAreaCall && storageAreaCall.body && storageAreaCall.body.data;
+        const storageAreaUuid = Array.isArray(data) && data.length
+          ? (data[0].uuid || data[0].id || data[0].storage_area_uuid || null)
+          : null;
+
+        if (storageAreaUuid) {
+          record.submitFields({
+            type: unit.recordType,
+            id: unit.recordId,
+            values: { [fieldId]: storageAreaUuid },
+            options: { ignoreMandatoryFields: true }
+          });
+        }
+      } catch (e) {
+        log.error("Error @ syncLocationStorageArea: ", e);
+        logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+      }
+    };
+
+    const writeBackSuccess = (entry, unit, uuid, payloadStr, cfg) => {
+      log.debug("Write Back Success", { details: { uuid: uuid, payloadLength: payloadStr.length } });
       const values = {};
       if (unit.uuidField && uuid) values[unit.uuidField] = uuid;
       if (unit.payloadField) values[unit.payloadField] = payloadStr;
@@ -1027,7 +1130,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           type: unit.recordType, id: unit.recordId, values: values,
           options: { ignoreMandatoryFields: true }
         });
+
+        if (entry.key === 'LOCATION' && unit.recordType === 'location' && uuid && cfg) {
+          syncLocationStorageArea(entry, unit, cfg, uuid);
+        }
       } catch (e) {
+        log.error("Error @ writeBackSuccess: ", e);
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1160,7 +1268,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (unit.addresses !== undefined) return unit.addresses;
       unit.addresses = [];
       try {
-        const rec = record.load({ type: 'location', id: unit.recordId, isDynamic: false });
+        const rec = unit.sourceRecord || record.load({
+          type: 'location',
+          id: unit.recordId,
+          isDynamic: false
+        });
+        unit.sourceRecord = rec;
         const sub = rec.getSubrecord({ fieldId: 'mainaddress' });
         const a = sub ? addrFromSub(sub, 'Main Address', null) : null;
         if (a) unit.addresses = [a];

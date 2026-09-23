@@ -1432,6 +1432,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           });
         } catch (e) { /* non-fatal */ }
       }
+      log.debug("Returning result from call()", { result });
       return result;
     };
 
