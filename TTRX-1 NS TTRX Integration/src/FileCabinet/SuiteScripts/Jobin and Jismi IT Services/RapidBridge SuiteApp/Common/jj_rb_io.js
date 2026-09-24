@@ -92,6 +92,82 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
      *          0 found → MAIN.  1 found → CHILD of it.  >1 → anomaly, see below.
      */
     /**
+     * Every write to a Sync Log record goes through here.
+     *
+     * A single unusable value — a list lookup that returned null, a field that
+     * is not on the form — makes NetSuite reject the WHOLE submitFields call.
+     * That is how a work item ends up stranded reading "Open - Retrying" with
+     * Open still ticked while its own Success flag says the call worked: the
+     * close ran, threw on one field, and the status update was lost with it.
+     *
+     * So: drop the unusable values first, and if the write still fails, retry
+     * with the handful of fields that decide whether the work item is open.
+     * Losing a decoration is acceptable; losing the close is not.
+     */
+    const CLOSE_ESSENTIALS = [L.status, L.open, L.success, L.lastAt, L.notBefore];
+
+    const submitLog = (o) => {
+      const clean = {};
+      const dropped = [];
+      Object.keys(o.values || {}).forEach((k) => {
+        const v = o.values[k];
+        if (v === null || v === undefined) { dropped.push(k); return; }
+        clean[k] = v;
+      });
+      if (dropped.length)
+        log.audit({
+          title: 'RB sync log write dropped unusable values',
+          details: { id: o.id, dropped: dropped }
+        });
+
+      try {
+        record.submitFields({
+          type: C.REC.LOG, id: o.id, values: clean,
+          options: { ignoreMandatoryFields: true }
+        });
+        return true;
+      } catch (e) {
+        log.error({ title: 'RB sync log write failed, retrying essentials', details: e });
+      }
+
+      const essential = {};
+      CLOSE_ESSENTIALS.forEach((f) => {
+        if (Object.prototype.hasOwnProperty.call(clean, f)) essential[f] = clean[f];
+      });
+      if (!Object.keys(essential).length) return false;
+
+      try {
+        record.submitFields({
+          type: C.REC.LOG, id: o.id, values: essential,
+          options: { ignoreMandatoryFields: true }
+        });
+        log.audit({
+          title: 'RB sync log write recovered',
+          details: { id: o.id, wrote: Object.keys(essential) }
+        });
+        return true;
+      } catch (e2) {
+        log.error({ title: 'RB sync log write failed outright ' + o.id, details: e2 });
+        return false;
+      }
+    };
+
+    /**
+     * The NetSuite Internal ID written on a log row, and the value every log
+     * lookup keys on.
+     *
+     * It is normally the record's own internal id. An ADDRESS is the exception:
+     * an address is not a NetSuite record of its own, so its log rows used to
+     * carry the PARENT's id — which meant every address shared one work-item
+     * key with its parent and with each other. Closing the parent's work item
+     * closed theirs, and nothing said which address a row was about.
+     *
+     * An address unit therefore carries `logNsId`, the parent id plus the
+     * NetSuite address id, and that is what is stored and searched.
+     */
+    const nsKey = (unit) => String((unit && unit.logNsId) || (unit && unit.recordId) || '');
+
+    /**
      * Every OPEN main work item for this subject, newest first.
      *
      * One definition, two callers — resolveLogTarget (to attach a retry to it)
@@ -105,7 +181,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           [L.parent, 'anyof', '@NONE@'], 'AND',
           [L.open, 'is', 'T'], 'AND',
           [L.recType, 'is', String(unit.recordType)], 'AND',
-          [L.nsId, 'is', String(unit.recordId)]
+          [L.nsId, 'is', nsKey(unit)]
         ];
         if (unit.uomId) filters.push('AND', [L.uom, 'anyof', unit.uomId]);
         else filters.push('AND', [L.uom, 'anyof', '@NONE@']);
@@ -195,7 +271,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       v[L.type] = lid(C.LIST.syncType, entry.syncType);
       v[L.operation] = lid(C.LIST.operation, operation || C.OPERATION.UPDATE);
       v[L.recType] = String(unit.recordType);
-      v[L.nsId] = String(unit.recordId);
+      v[L.nsId] = nsKey(unit);
       if (unit.storedUuid) v[L.uuid] = unit.storedUuid;
       if (cfg && cfg.id) v[L.config] = cfg.id;
       if (cfg && cfg.subsidiary) v[L.subsidiary] = cfg.subsidiary;
@@ -323,7 +399,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         if (noCall) {
           // Touch the clock so the work item does not look abandoned, but do
           // NOT spend an attempt and do NOT claim it is retrying.
-          record.submitFields({
+          submitLog({
             type: C.REC.LOG, id: parentId, values: { [L.lastAt]: new Date() },
             options: { ignoreMandatoryFields: true }
           });
@@ -333,7 +409,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           type: C.REC.LOG, id: parentId,
           columns: [L.attempts]
         });
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: parentId, values: {
             [L.attempts]: (Number(cur[L.attempts]) || 0) + 1,
             [L.lastAt]: new Date(),
@@ -379,7 +455,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       });
 
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: logRec.id, values: v,
           options: { ignoreMandatoryFields: true }
         });
@@ -411,7 +487,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         }
       });
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: mainId, values: {
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.CLOSED_SUCCESS),
             [L.open]: false,
@@ -437,7 +513,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     const restoreParent = (parentId, note) => {
       if (!parentId) return;
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: parentId, values: {
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.OPEN_PENDING),
             [L.open]: true,
@@ -474,7 +550,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         return false;
       }
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: res.logId, values: {
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.CLOSED_NO_ACTION),
             [L.open]: false,
@@ -513,7 +589,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         return false;
       }
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: res.logId, values: {
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.OPEN_PENDING),
             [L.open]: true,
@@ -578,7 +654,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       let closed = 0;
       open.forEach((id) => {
         try {
-          record.submitFields({
+          submitLog({
             type: C.REC.LOG, id: id, values: {
               [L.status]: lid(C.LIST.syncStatus, status || C.STATUS.CLOSED_NO_ACTION),
               [L.open]: false,
@@ -644,7 +720,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       });
 
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: mainId, values: v,
           options: { ignoreMandatoryFields: true }
         });
@@ -666,7 +742,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     const closeNeedsReview = (target, res, note, suggested) => {
       const mainId = target.mode === 'MAIN' ? res.logId : target.parentId;
       try {
-        record.submitFields({
+        submitLog({
           type: C.REC.LOG, id: mainId, values: {
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.OPEN_REVIEW),
             [L.open]: true,
@@ -737,7 +813,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           // The work item always tracks the LATEST intent (§12.5).
           if (o.payload) v2[L.payload] = util.clip(o.payload, 100000);
           if (o.note) v2[L.error] = util.clip(o.note, 3900);
-          record.submitFields({
+          submitLog({
             type: C.REC.LOG, id: survivor, values: v2,
             options: { ignoreMandatoryFields: true }
           });
@@ -923,7 +999,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       (loserIds || []).forEach((id) => {
         if (String(id) === String(survivorId)) return;
         try {
-          record.submitFields({
+          submitLog({
             type: C.REC.LOG, id: id, values: {
               [L.status]: lid(C.LIST.syncStatus, C.STATUS.CLOSED_MERGED),
               [L.open]: false,
@@ -942,7 +1018,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             type: C.REC.LOG, id: survivorId,
             columns: [L.mergedCount]
           });
-          record.submitFields({
+          submitLog({
             type: C.REC.LOG, id: survivorId, values: {
               [L.mergedCount]: (Number(cur[L.mergedCount]) || 0) + merged
             }, options: { ignoreMandatoryFields: true }
@@ -1019,7 +1095,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       try {
         const filters = [
           [L.recType, 'is', String(unit.recordType)], 'AND',
-          [L.nsId, 'is', String(unit.recordId)], 'AND',
+          [L.nsId, 'is', nsKey(unit)], 'AND',
           [L.success, 'is', 'T']
         ];
         if (entry && entry.syncType) {
@@ -1099,9 +1175,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         // Record type and Sync Type are part of the key, always.
         const filters = [
           [L.recType, 'is', String(C.REC.UOM)], 'AND',
-          [L.item,    'anyof', itemId],         'AND',
-          [L.success, 'is', 'T'],               'AND',
-          [L.uuid,    'isnotempty', '']
+          [L.item, 'anyof', itemId], 'AND',
+          [L.success, 'is', 'T'], 'AND',
+          [L.uuid, 'isnotempty', '']
         ];
         if (entry && entry.syncType) {
           const typeId = lid(C.LIST.syncType, entry.syncType);

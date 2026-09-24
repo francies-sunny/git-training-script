@@ -196,13 +196,22 @@ define(['N/search'],
       PARTNER_UPDATE: { method: 'PUT', path: '/trading_partners/{uuid}' },
       PARTNER_DELETE: { method: 'DELETE', path: '/trading_partners/{uuid}' },
       PARTNER_ADDRESS: { method: 'POST', path: '/trading_partners/{uuid}/addresses' },
+      // An address CAN be updated. Two path parameters: the trading partner and
+      // the address within it.
+      PARTNER_ADDRESS_UPDATE: { method: 'PUT', path: '/trading_partners/{uuid}/addresses/{address_uuid}' },
       LOCATION_CREATE: { method: 'POST', path: '/locations' },
       LOCATION_UPDATE: { method: 'PUT', path: '/locations/{uuid}' },
       LOCATION_DELETE: { method: 'DELETE', path: '/locations/{uuid}' },
       LOCATION_ADDRESS: { method: 'POST', path: '/locations/{uuid}/addresses' },
+      // Location address sync is currently off (location.hasChildren), but the
+      // endpoint is declared so switching it back on needs no change here.
+      LOCATION_ADDRESS_UPDATE: { method: 'PUT', path: '/locations/{uuid}/addresses/{address_uuid}' },
       STORAGE_AREAS: { method: 'GET', path: '/locations/{uuid}/storage_areas' },
       BIN_CREATE: { method: 'POST', path: '/locations/{locationUuid}/storage_areas' },
       BIN_UPDATE: { method: 'PUT', path: '/locations/{locationUuid}/storage_areas/{uuid}' },
+      // Not called by anything. The address payload sends the state as the
+      // NetSuite record spells it; nothing is resolved to an id. Kept in the
+      // catalogue because this file is the one place an endpoint is written.
       STATES: { method: 'GET', path: '/utility/country_list/{countryId}/states' },
       HEALTH: { method: 'GET', path: '/health' }
     });
@@ -237,7 +246,19 @@ define(['N/search'],
 
       location: {
         key: 'LOCATION', syncType: SYNCTYPE.LOCATION, builder: 'location', implemented: true,
-        featureFlag: null, hasChildren: 'addressbook', logSubjectField: LOG.location,
+        featureFlag: null,
+        // ── Location ADDRESS sync is OFF. ──────────────────────────────────
+        // This one value is the whole switch. While it is null the engine
+        // pushes no address child calls for a Location, and buildLocation
+        // leaves the address set out of the comparison, so an address-only
+        // edit does not re-send the Location either.
+        //
+        // To switch it back on: set this to 'addressbook'. Nothing else needs
+        // to change — the child endpoint below and the address builder, the
+        // change detection and the write-back all stay in place and are still
+        // used by Customer and Vendor, which are unaffected.
+        hasChildren: null,
+        logSubjectField: LOG.location,
         parentField: 'parent',                     // NetSuite's own location hierarchy
         fields: {
           uuid: 'custrecord_jj_rb_location_uuid',
@@ -259,7 +280,8 @@ define(['N/search'],
         },
         endpoints: {
           create: EP.LOCATION_CREATE, update: EP.LOCATION_UPDATE,
-          remove: EP.LOCATION_DELETE, child: EP.LOCATION_ADDRESS
+          remove: EP.LOCATION_DELETE,
+          child: EP.LOCATION_ADDRESS, childUpdate: EP.LOCATION_ADDRESS_UPDATE
         }
       },
 
@@ -344,7 +366,8 @@ define(['N/search'],
         },
         endpoints: {
           create: EP.PARTNER_CREATE, update: EP.PARTNER_UPDATE,
-          remove: EP.PARTNER_DELETE, child: EP.PARTNER_ADDRESS
+          remove: EP.PARTNER_DELETE,
+          child: EP.PARTNER_ADDRESS, childUpdate: EP.PARTNER_ADDRESS_UPDATE
         }
       };
     }
@@ -352,7 +375,16 @@ define(['N/search'],
     /** Address subrecord fields — children of an entity or a location. §10.5. */
     const ADDR = Object.freeze({
       uuid: 'custrecord_jj_rb_addr_uuid', sgln: 'custrecord_jj_rb_addr_sgln',
-      error: 'custrecord_jj_rb_addr_error'
+      error: 'custrecord_jj_rb_addr_error',
+      // NEW. Without a stored payload every parent update re-POSTed every
+      // address, and the address endpoint only creates — so each parent edit
+      // added another duplicate address in the Middleware.
+      payload: 'custrecord_jj_rb_addr_payload'
+      // The NetSuite address internal id is deliberately NOT a field here. It
+      // already exists — it is NetSuite's own id for the address — so copying
+      // it onto the address would be a third home for the same value. It is
+      // carried on the SYNC LOG instead, inside the NetSuite Internal ID of the
+      // address's own work item (see nsKey in jj_rb_io.js).
     });
 
     /**
@@ -468,6 +500,36 @@ define(['N/search'],
      * pushed as their own calls and must not ride the parent body.
      */
     const COMPARE_KEY = '__compare';
+
+    /**
+     * The mirror image of COMPARE_KEY: values that go ON THE WIRE but must be
+     * kept OUT of the comparison.
+     *
+     * `custom_uuid` is the whole reason this exists. It is empty on the create
+     * and holds the TrackTrace UUID afterwards, so the payload legitimately
+     * differs before and after the first successful sync — for a record whose
+     * data has not changed at all. Comparing it would make the write-back of
+     * the UUID look like an edit and fire a pointless update on the next save.
+     *
+     * The identity is not part of what is being compared. What is compared is
+     * the DATA.
+     */
+    const COMPARE_IGNORE = Object.freeze(['custom_uuid']);
+
+    /**
+     * The canonical string used for CHANGE DETECTION. Same renderer as
+     * canonical(), minus the identity keys. Everything else, including the
+     * empty keys and the __compare block, is kept.
+     */
+    const canonicalCompare = (payload) => {
+      if (!payload || typeof payload !== 'object') return canonical(payload);
+      const out = {};
+      Object.keys(payload).forEach((k) => {
+        if (COMPARE_IGNORE.indexOf(k) !== -1) return;
+        out[k] = payload[k];
+      });
+      return canonical(out);
+    };
     const stripCompare = (payload) => {
       if (!payload || typeof payload !== 'object') return payload;
       const out = {};
@@ -526,7 +588,8 @@ define(['N/search'],
     };
 
     const util = {
-      uuid, canonical, samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
+      uuid, canonical, canonicalCompare, COMPARE_IGNORE,
+      samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
       clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged
     };
 

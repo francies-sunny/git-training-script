@@ -1,0 +1,38 @@
+<othercustomfield scriptid="custrecord_jj_rb_addr_payload">
+  <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
+  <applyformatting>F</applyformatting>
+  <applytoallforms>T</applytoallforms>
+  <checkspelling>F</checkspelling>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>The exact payload string the Middleware last accepted for this address line. Change detection for an address is a direct comparison of this against the freshly built address payload. It matters more here than anywhere else: the Middleware address endpoint CREATES only, so re-sending an unchanged address does not update it - it adds a duplicate. NEVER written on a failure, or a failed address would compare equal on the next save and never sync again. Written by the SuiteApp only.</description>
+  <displayheight>4</displayheight>
+  <displaytype>LOCKED</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <enabletextenhance>F</enabletextenhance>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>TEXTAREA</fieldtype>
+  <help>The exact payload string the Middleware last accepted for this address line. Change detection for an address is a direct comparison of this against the freshly built address payload. It matters more here than anywhere else: the Middleware address endpoint CREATES only, so re-sending an unchanged address does not update it - it adds a duplicate. NEVER written on a failure, or a failed address would compare equal on the next save and never sync again. Written by the SuiteApp only.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>RapidBridge Address Last Accepted Payload</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <rectype>-289</rectype>
+  <searchcomparefield></searchcomparefield>
+  <searchdefault></searchdefault>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype></selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <showinlist>F</showinlist>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</othercustomfield>

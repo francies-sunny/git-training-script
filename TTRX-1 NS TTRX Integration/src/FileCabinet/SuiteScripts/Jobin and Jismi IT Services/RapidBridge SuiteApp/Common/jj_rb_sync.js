@@ -32,7 +32,6 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     // Cached across one execution only.
     const DELETE_CACHE = {};   // recordType|id -> { uuid, name, uomUuids:[] }
-    const STATE_CACHE = {};   // countryCode   -> { stateName: id }
     const PRESYNCED = {};   // recordType|id -> true, cycle guard for the cascade
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -321,11 +320,24 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         // area is wanted on create, and only when the account is not on Bin
         // Management — with real bins it would create a second, unmanaged
         // storage area alongside them.
-        create_default_storage_area: (!unit.storedUuid && cfg.useBins !== true)
+        // create_default_storage_area: (!unit.storedUuid && cfg.useBins !== true)
+        create_default_storage_area: true // always true for now
       };
 
-      const addr = locationAddresses(unit);
-      if (addr.length) payload[util.COMPARE_KEY] = { addresses: addr.map(compareAddr) };
+      // The address set belongs in the comparison ONLY while the addresses are
+      // actually pushed. Location address sync is currently off — see
+      // location.hasChildren in jj_rb_core.js — so the Location payload carries
+      // no address summary and the Main Address subrecord is not even read.
+      // Including it would make an address-only edit re-send the Location for
+      // a change that never leaves NetSuite.
+      //
+      // Flip location.hasChildren back to 'addressbook' and this returns with
+      // it. When present it is ALWAYS present, even when empty, so that
+      // deleting the last address still moves the comparison.
+      if (entry.hasChildren) {
+        const addr = locationAddresses(unit);
+        payload[util.COMPARE_KEY] = { addresses: addr.map(compareAddr) };
+      }
 
       return payload;
     };
@@ -335,6 +347,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * only difference is `type`.
      */
     const buildPartner = (unit, cfg, entry) => {
+      log.debug("buildPartner", unit, cfg, entry);
       const f = entry.fields;
       const d = unit.data;
       const isPerson = util.truthy(d.isperson);
@@ -386,13 +399,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         omit_comm_aggr_in_epcis: false
       };
 
-      // The idempotency key is generated on CREATE only — it lets the
-      // Middleware recognise a repeat if our response is lost. On an update the
-      // key still has to be present, and it carries the UUID we already hold.
-      if (!unit.storedUuid) payload.custom_uuid = util.uuid();
-
+      // Always present, even when empty — see buildLocation.
       const addrs = entityAddresses(unit);
-      if (addrs.length) payload[util.COMPARE_KEY] = { addresses: addrs.map(compareAddr) };
+      payload[util.COMPARE_KEY] = { addresses: addrs.map(compareAddr) };
 
       return payload;
     };
@@ -473,10 +482,6 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       // "bins not available".
       Object.assign(payload, binState(d, cfg));
 
-      if (!unit.storedUuid) {
-        payload.custom_uuid = util.uuid();
-      }
-
       return payload;
     };
 
@@ -500,7 +505,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /**
      * §10.5 — an address payload. Child of an entity or a location.
-     * `state_id` must be an id: free text where an id is expected fails silently.
+     *
+     * Every value comes straight off the NetSuite address subrecord. Nothing is
+     * looked up or translated: the state goes out as the record spells it, the
+     * same way the reference build sends it.
      */
     const buildAddress = (addr, cfg, parentName) => {
       // The FULL reference address key set. Every key always present.
@@ -515,8 +523,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         line1: txt(addr.addr1),
         line2: txt(addr.addr2),
         country_code: txt(addr.country),
-        // The reference build sends the state as free text. It is kept for
-        // contract parity.
+        // Free text, exactly as held on the address. The Middleware state-list
+        // lookup that used to turn this into a state_id has been removed: it
+        // cost a call per country, and an unmatched state produced an empty id
+        // that told the Middleware less than the spelling does.
         state: txt(addr.state),
         city: txt(addr.city),
         zip: txt(addr.zip),
@@ -524,11 +534,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         is_licence_required: false
       };
 
-      // NEW key. The Middleware's own state list resolved from the country, so
-      // a state is identified rather than spelled. Sent empty when the country
-      // or the state cannot be matched — never guessed, never omitted.
-      const stateId = resolveStateId(addr.country, addr.state, cfg);
-      body.state_id = (stateId === null || stateId === undefined) ? '' : stateId;
+      // No state_id. The reference address contract does not carry one, and the
+      // key set above is now exactly the reference set.
+      // // NEW key. The Middleware's own state list resolved from the country, so
+      // // a state is identified rather than spelled. Sent empty when the country
+      // // or the state cannot be matched — never guessed, never omitted.
+      // const stateId = resolveStateId(addr.country, addr.state, cfg);
+      // body.state_id = (stateId === null || stateId === undefined) ? '' : stateId;
 
       return body;
     };
@@ -691,7 +703,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         }
 
         const payload = builders[entry.builder](unit, cfg, entry);    // step 2
-        const payloadStr = util.canonical(payload);                      // step 3
+        // step 3. The COMPARISON string leaves custom_uuid out: it is empty on
+        // the create and holds the TrackTrace UUID afterwards, so including it
+        // would make writing that UUID back look like an edit and fire a
+        // pointless update on the very next save. The SENT body still carries
+        // it — see sendBody below.
+        const payloadStr = util.canonicalCompare(payload);
         const sendBody = util.stripCompare(payload);
 
         // ── step 4: THE TRIGGER TEST — a direct string comparison against the
@@ -754,6 +771,29 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               log.error({ title: 'RB could not write adopted UUID', details: e });
             }
           }
+        }
+
+        // A create that the Middleware ACCEPTED but answered without a UUID
+        // leaves the record with no identifier. The next changed save would
+        // resolve to CREATE again and make a second copy remotely. Refuse it
+        // and put a person on it instead.
+        if (prior && !prior.uuid && !unit.storedUuid && !util.blank(prior.logId)) {
+          logIo.openDeferred({
+            entry: entry, unit: unit, cfg: cfg,
+            reason: C.REASON.AWAITING_DECISION,
+            status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger, payload: payloadStr,
+            note: 'This record was already created in the Middleware (Sync Log ' +
+              prior.logId + ') but the response carried no UUID, so NetSuite ' +
+              'cannot address it. Sending again would create a duplicate.',
+            correlation: correlation
+          });
+          logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null,
+            'Created in the Middleware but no UUID was returned, so this record ' +
+            'cannot be updated. Enter the UUID from TrackTraceRX in the ' +
+            'RapidBridge External UUID field, then save again.');
+          results.push({ ok: false, blocked: 'created without a UUID' });
+          return;
         }
 
         const forced = trigger === C.TRIGGER.MASS_UPDATE
@@ -822,10 +862,32 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         });
 
         if (res.ok) {
-          log.debug("Call For Write Back Success", { details: { uuid: res.uuid || unit.storedUuid } });                                            // step 7
-          writeBackSuccess(entry, unit, res.uuid || unit.storedUuid, payloadStr, cfg);
+          const finalUuid = res.uuid || unit.storedUuid || '';
+          log.debug("Call For Write Back Success", { details: { uuid: finalUuid } });   // step 7
+
+          // The payload IS stored even here, so the next save does not fire the
+          // API again for the same unchanged record — the false re-trigger this
+          // whole change is about. What is not done is calling it finished.
+          writeBackSuccess(entry, unit, finalUuid, payloadStr, cfg);
+
+          if (util.blank(finalUuid)) {
+            // Accepted, but we have no way to name the object again. Every
+            // later UPDATE is impossible and every later CREATE is a duplicate.
+            logIo.closeNeedsReview(target, res,
+              'The record was accepted but the response carried no UUID, so ' +
+              'nothing could be written back and this record cannot be updated.',
+              'Read the object UUID from TrackTraceRX and enter it in the ' +
+              'RapidBridge External UUID field on this record. Until then no ' +
+              'update can be sent for it.');
+            logIo.stampTry(unit, C.TRY.SYNCED, null,
+              'Accepted by the Middleware, but no UUID was returned. Enter it ' +
+              'by hand before this record is edited again.');
+            results.push({ ok: true, uuid: '', noUuid: true });
+            return;
+          }
+
           logIo.closeSuccess(target, res);
-          results.push({ ok: true, uuid: res.uuid || unit.storedUuid });
+          results.push({ ok: true, uuid: finalUuid });
 
           if (entry.hasChildren && cfg.useAddress)
             syncChildAddresses(entry, unit, res.uuid || unit.storedUuid, cfg,
@@ -1366,7 +1428,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try { return sub.getValue({ fieldId: f }) || ''; } catch (e) { return ''; }
     };
 
-    const addrFromSub = (sub, nickname, line) => {
+    const addrFromSub = (sub, nickname, line, nsId) => {
+      let subId = null;
+      try { subId = sub.id || null; } catch (e) { subId = null; }
+
       const a = {
         nickname: nickname || 'Main Address',
         addressee: readSub(sub, 'addressee'),
@@ -1376,6 +1441,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         phone: readSub(sub, 'addrphone'),
         sgln: readSub(sub, C.ADDR.sgln),
         uuid: readSub(sub, C.ADDR.uuid),
+        // What this address last had accepted. Without it every parent update
+        // re-sent every address.
+        payload: readSub(sub, C.ADDR.payload),
+        // The NetSuite address id. The line index is only a position.
+        // Read live from NetSuite each time. It is NetSuite's own id for this
+        // address; it is recorded on the Sync Log, not copied onto the address.
+        nsId: nsId || subId || '',
         line: (line === undefined ? null : line)
       };
       return (!a.addr1 && !a.city && !a.zip) ? null : a;
@@ -1426,7 +1498,14 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             }) || '';
           }
           catch (e) { /* no label field on this form */ }
-          const a = addrFromSub(sub, label || ('Address ' + (i + 1)), i);
+          let nsId = '';
+          try {
+            nsId = rec.getSublistValue({
+              sublistId: 'addressbook', fieldId: 'internalid', line: i
+            }) || '';
+          } catch (e) { /* not exposed on this record type */ }
+
+          const a = addrFromSub(sub, label || ('Address ' + (i + 1)), i, nsId);
           if (a) unit.addresses.push(a);
         }
       } catch (e) {
@@ -1443,56 +1522,203 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * and its own work item, capped at max_inline.
      */
     const syncChildAddresses = (entry, unit, parentUuid, cfg, correlation, trigger) => {
+      log.debug("RB syncChildAddresses");
+      // The caller already checks entry.hasChildren; this is the second lock on
+      // the same door, so a future caller cannot push addresses for a record
+      // type whose address sync is switched off.
+      if (!entry.hasChildren || !entry.endpoints || !entry.endpoints.child) {
+        log.debug({
+          title: 'RB address sync is off for ' + entry.key,
+          details: { recordType: unit.recordType, recordId: unit.recordId }
+        });
+        return;
+      }
+
       const addrs = readAddresses(entry, unit);
-      if (!addrs.length) return;
+
+      log.debug("Addresses to sync", addrs);
+
+      if (!addrs.length) {
+        // Not an error and not a silence. A Location with an empty Main
+        // Address, or an entity with no address book line that has a street,
+        // city or postal code, simply has nothing to push. The parent is
+        // already synchronized; there is no work item to open and nothing to
+        // stamp, because an address is not a NetSuite record of its own.
+        log.debug({
+          title: 'RB no addresses to sync ' + unit.recordType + '/' + unit.recordId,
+          details: 'no address line carries a street, city or postal code'
+        });
+        return;
+      }
+
+      if (util.blank(parentUuid)) {
+        // The address endpoint is addressed by the parent. Without the parent
+        // UUID there is nothing to POST to.
+        log.audit({
+          title: 'RB addresses not sent: parent has no UUID',
+          details: { recordType: unit.recordType, recordId: unit.recordId }
+        });
+        return;
+      }
 
       const cap = Number(cfg.maxInline) || 5;
-      const parentName = textOf(unit.data.companyname) || textOf(unit.data.name) ||
-        textOf(unit.data.entityid);
+      const parentName = txt(unit.data.companyname) || txt(unit.data.name) ||
+        txt(unit.data.entityid);
 
       const addrEntry = {
         key: 'ADDRESS', syncType: C.SYNCTYPE.ADDRESS, builder: 'address',
         implemented: true, logSubjectField: entry.logSubjectField,
-        fields: {}, endpoints: { create: entry.endpoints.child }
+        fields: {},
+        endpoints: {
+          create: entry.endpoints.child,
+          update: entry.endpoints.childUpdate || null
+        }
       };
 
       addrs.forEach((addr, i) => {
+        const body = buildAddress(addr, cfg, parentName);
+        const addrPayload = util.canonicalCompare(body);
+
+        log.debug("RB address payload", addrPayload);
+
+        // ── The address trigger test. The address endpoint CREATES; there is
+        //    no update. Re-POSTing an unchanged address is not a wasted call,
+        //    it is a DUPLICATE address in the Middleware — and every edit to
+        //    the parent used to do exactly that to every one of its addresses.
+        if (!util.blank(addr.uuid) && util.samePayload(addrPayload, addr.payload)) {
+          log.debug({
+            title: 'RB address unchanged ' + unit.recordType + '/' + unit.recordId,
+            details: { nsAddressId: addr.nsId || null, uuid: addr.uuid }
+          });
+          return;
+        }
+
         const addrUnit = Object.assign({
           recordType: unit.recordType, recordId: unit.recordId, uomId: null,
-          storedUuid: addr.uuid || null, storedPayload: null, storedSynced: false, data: {}
+          // The Sync Log subject key for an address. Without it every address
+          // shared one work-item key with its parent and with its siblings, so
+          // the NetSuite address could not be identified from the log and
+          // closing the parent's work item closed the addresses' too.
+          logNsId: String(unit.recordId) + '#addr:' +
+            (addr.nsId || ('line' + (addr.line === null ? 'main' : addr.line))),
+          storedUuid: addr.uuid || null, storedPayload: addr.payload || null,
+          storedSynced: !util.blank(addr.uuid), data: {}
         }, unitFields({}));
+
+        log.debug("RB address unit", addrUnit);
 
         if (i >= cap) {
           logIo.openDeferred({
             entry: addrEntry, unit: addrUnit, cfg: cfg,
             reason: C.REASON.PAYLOAD_CHANGED,
             status: C.STATUS.OPEN_PENDING, outcome: C.OUTCOME.SKIPPED,
-            trigger: trigger,
+            trigger: trigger, payload: addrPayload,
             note: 'Beyond the inline cap of ' + cap + ' addresses for this save.',
             correlation: correlation
           });
           return;
         }
 
-        const body = buildAddress(addr, cfg, parentName);
-        const addrPayload = util.canonical(body);
+        // ── Create or update, decided the same way as every other subject:
+        //    by whether this address already holds a UUID.
+        //
+        //    An address CAN be updated — PUT to the address inside its parent,
+        //    two path parameters. This is how the reference build does it, and
+        //    it replaces the manual-review branch that used to sit here back
+        //    when only a create endpoint was known.
+        const isUpdate = !util.blank(addr.uuid);
+        const endpoint = isUpdate ? addrEntry.endpoints.update : addrEntry.endpoints.create;
+
+        if (!endpoint) {
+          // Only reachable if a record type declares a create endpoint and no
+          // update one. Say so rather than sending a create and duplicating.
+          logIo.openDeferred({
+            entry: addrEntry, unit: addrUnit, cfg: cfg,
+            reason: C.REASON.AWAITING_DECISION,
+            status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger, payload: addrPayload,
+            note: 'This address changed after it was accepted, but ' + entry.key +
+              ' has no address update endpoint configured. Sending it again ' +
+              'would add a duplicate.',
+            correlation: correlation
+          });
+          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
+            [C.ADDR.error]: 'Changed after acceptance and no address update ' +
+              'endpoint is configured for ' + entry.key + '.'
+          });
+          return;
+        }
+
+        const operation = isUpdate ? C.OPERATION.UPDATE : C.OPERATION.CREATE;
 
         const target = logIo.resolveLogTarget({
-          entry: addrEntry, unit: addrUnit, operation: C.OPERATION.CREATE,
-          payload: addrPayload, cfg: cfg
+          entry: addrEntry, unit: addrUnit, operation: operation,
+          payload: addrPayload, cfg: cfg, correlation: correlation
+        });
+
+        log.debug({
+          title: 'RB address ' + operation + ' ' + unit.recordType + '/' + unit.recordId,
+          details: {
+            nsAddressId: addr.nsId || null, addressUuid: addr.uuid || null,
+            parentUuid: parentUuid, endpoint: endpoint.path,
+            payloadLength: addrPayload.length
+          }
         });
 
         const res = client.call({
           entry: addrEntry, unit: addrUnit, cfg: cfg, target: target,
-          endpoint: entry.endpoints.child, pathParams: { uuid: parentUuid },
-          body: body, operation: C.OPERATION.CREATE, payload: addrPayload,
+          endpoint: endpoint,
+          // The create needs the parent only; the update needs the parent AND
+          // the address. Both are passed either way — buildUrl substitutes what
+          // the path asks for and ignores the rest.
+          pathParams: { uuid: parentUuid, address_uuid: addr.uuid || '' },
+          body: body, operation: operation, payload: addrPayload,
           trigger: trigger, correlation: correlation, requestUuid: correlation
         });
 
         if (res.ok) {
+          // On an UPDATE the response need not repeat the identifier — we
+          // already hold it. Only a CREATE that answers without one leaves us
+          // unable to name the address.
+          const newUuid = res.uuid || addr.uuid || '';
+
+          if (util.blank(newUuid)) {
+            // The address now exists remotely and we cannot name it. Writing a
+            // blank UUID and calling it done is how an address ends up with
+            // nothing in any field and no complaint anywhere — and the next
+            // parent edit would create it all over again.
+            logIo.closeNeedsReview(target, res,
+              'The address was accepted but the response carried no UUID, so ' +
+              'nothing could be written back to the NetSuite address line.',
+              'Read the address UUID from TrackTraceRX and enter it in the ' +
+              'RapidBridge External UUID field on this address line. Until ' +
+              'then every parent edit will create another copy of it.');
+            writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
+              [C.ADDR.error]: 'Accepted by the Middleware but no UUID was ' +
+                'returned. Enter it by hand before editing this record again.'
+            });
+
+            log.debug("RB address accepted but no UUID returned", {
+              recordType: unit.recordType, recordId: unit.recordId,
+              line: addr.line, payloadLength: addrPayload.length
+            });
+            return;
+          }
+
           logIo.closeSuccess(target, res);
-          writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
-            C.ADDR.uuid, res.uuid || '');
+          // One save: the identifier, what was accepted, the NetSuite address
+          // id and a cleared error.
+          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
+            [C.ADDR.uuid]: newUuid,
+            [C.ADDR.payload]: addrPayload,
+            [C.ADDR.error]: ''
+          });
+
+          log.debug("RB address accepted and written back", {
+            recordType: unit.recordType, recordId: unit.recordId,
+            line: addr.line, uuid: newUuid, payloadLength: addrPayload.length
+          });
+
         } else if (res.suppressed || res.dryRun) {
           logIo.closeNoAction(target, res,
             res.suppressed
@@ -1503,8 +1729,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             res.errorMessage || 'Kill switch is on; no call was made.');
         } else {
           logIo.closeFailure(target, res, cfg);
-          writeAddressField(entry, unit.recordType, unit.recordId, addr.line,
-            C.ADDR.error, util.clip(res.errorMessage, 900));
+          // The payload is deliberately NOT written on a failure, so the next
+          // save tries again instead of comparing equal for ever.
+          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
+            [C.ADDR.error]: util.clip(res.errorMessage, 900)
+          });
+
+          log.debug("RB address failed to sync", {
+            recordType: unit.recordType, recordId: unit.recordId,
+            line: addr.line, payloadLength: addrPayload.length,
+            error: res.errorMessage
+          });
         }
       });
     };
@@ -1517,58 +1752,95 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * `No change` without calling out. The payload comparison IS the loop
      * breaker (§2.2).
      */
-    const writeAddressField = (entry, recordType, recordId, line, fieldId, value) => {
+    /**
+     * Write several values onto ONE address subrecord in ONE load and save.
+     *
+     * Each save of the parent re-fires the User Event, so writing the uuid and
+     * the payload and the error as three separate saves meant three extra
+     * executions per address. The payload comparison stops them doing any work,
+     * but they still cost governance and fill the execution log.
+     */
+    const writeAddressValues = (entry, recordType, recordId, addr, values) => {
+      log.debug("Write Address Values", { details: { recordType: recordType, recordId: recordId, line: addr.line, values: values } });
+      const keys = Object.keys(values || {});
+      if (!keys.length) return false;
       try {
         const rec = record.load({ type: recordType, id: recordId, isDynamic: false });
+        const line = addr.line;
         const sub = (line === null || line === undefined)
           ? rec.getSubrecord({ fieldId: 'mainaddress' })
           : rec.getSublistSubrecord({
             sublistId: 'addressbook',
             fieldId: 'addressbookaddress', line: line
           });
-        if (!sub) return;
-        sub.setValue({ fieldId: fieldId, value: value });
+        if (!sub) {
+          log.error({
+            title: 'RB address write-back found no subrecord',
+            details: { recordType: recordType, recordId: recordId, line: line }
+          });
+          return false;
+        }
+        keys.forEach((f) => {
+          try { sub.setValue({ fieldId: f, value: values[f] }); }
+          catch (e) {
+            // A field that is not deployed on the Address record must not cost
+            // us the rest of the write-back — the UUID above all.
+            log.error({
+              title: 'RB address field not writable: ' + f,
+              details: (e && e.message) || String(e)
+            });
+          }
+        });
         rec.save({ ignoreMandatoryFields: true, enableSourcing: false });
+        log.debug({
+          title: 'RB address write-back',
+          details: {
+            recordType: recordType, recordId: recordId,
+            line: line, nsAddressId: addr.nsId || null, wrote: keys
+          }
+        });
+        return true;
       } catch (e) {
         logIo.exception(entry, { type: recordType, id: recordId }, e);
+        return false;
       }
     };
 
-    /**
-     * Country → state id. Free text where an id is expected fails silently, so
-     * an unresolvable state is OMITTED rather than guessed.
-     */
-    const resolveStateId = (countryCode, stateValue, cfg) => {
-      if (util.blank(countryCode) || util.blank(stateValue)) return null;
-      const key = String(countryCode).toUpperCase();
+    // /**
+    //  * Country → state id. Free text where an id is expected fails silently, so
+    //  * an unresolvable state is OMITTED rather than guessed.
+    //  */
+    // const resolveStateId = (countryCode, stateValue, cfg) => {
+    //   if (util.blank(countryCode) || util.blank(stateValue)) return null;
+    //   const key = String(countryCode).toUpperCase();
 
-      if (!STATE_CACHE[key]) {
-        const map = {};
-        const res = client.call({
-          entry: {
-            key: 'STATES', syncType: C.SYNCTYPE.ADDRESS, implemented: true,
-            fields: {}, endpoints: {}
-          },
-          unit: {
-            recordType: 'location', recordId: 0, uomId: null, storedUuid: null,
-            payloadField: null, tryResultField: null, lastTryField: null, data: {}
-          },
-          cfg: cfg, target: { mode: 'MAIN' },
-          endpoint: C.EP.STATES, pathParams: { countryId: key },
-          body: null, operation: C.OPERATION.QUERY, trigger: C.TRIGGER.INITIAL
-        });
-        if (res.ok && res.body) {
-          const rows = res.body.data || res.body.states || res.body;
-          if (Array.isArray(rows)) rows.forEach((s) => {
-            if (s && s.name) map[String(s.name).toLowerCase()] = s.id || s.uuid;
-            if (s && s.code) map[String(s.code).toLowerCase()] = s.id || s.uuid;
-          });
-        }
-        STATE_CACHE[key] = map;
-      }
-      const id = STATE_CACHE[key][String(stateValue).toLowerCase()];
-      return id === undefined ? null : id;
-    };
+    //   if (!STATE_CACHE[key]) {
+    //     const map = {};
+    //     const res = client.call({
+    //       entry: {
+    //         key: 'STATES', syncType: C.SYNCTYPE.ADDRESS, implemented: true,
+    //         fields: {}, endpoints: {}
+    //       },
+    //       unit: {
+    //         recordType: 'location', recordId: 0, uomId: null, storedUuid: null,
+    //         payloadField: null, tryResultField: null, lastTryField: null, data: {}
+    //       },
+    //       cfg: cfg, target: { mode: 'MAIN' },
+    //       endpoint: C.EP.STATES, pathParams: { countryId: key },
+    //       body: null, operation: C.OPERATION.QUERY, trigger: C.TRIGGER.INITIAL
+    //     });
+    //     if (res.ok && res.body) {
+    //       const rows = res.body.data || res.body.states || res.body;
+    //       if (Array.isArray(rows)) rows.forEach((s) => {
+    //         if (s && s.name) map[String(s.name).toLowerCase()] = s.id || s.uuid;
+    //         if (s && s.code) map[String(s.code).toLowerCase()] = s.id || s.uuid;
+    //       });
+    //     }
+    //     STATE_CACHE[key] = map;
+    //   }
+    //   const id = STATE_CACHE[key][String(stateValue).toLowerCase()];
+    //   return id === undefined ? null : id;
+    // };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // User Event helpers
@@ -2000,7 +2272,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       writeBackSuccess, writeBackFailure,
       lockSyncFields, clearAllSyncFields, cacheForDelete, handleDelete,
       validateConfig, validateUomRow, validateItem,
-      ensureParentLocation, resolveStateId, isEligible,
-      locationAddresses, entityAddresses
+      ensureParentLocation, isEligible,
+      locationAddresses, entityAddresses,
+      // resolveStateId, 
     };
   });
