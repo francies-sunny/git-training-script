@@ -51,7 +51,6 @@ define(['N/search'],
       retryMaxAge: 'custrecord_jj_rb_cf_retry_max_age',
       capture: 'custrecord_jj_rb_cf_capture',
       payloadCap: 'custrecord_jj_rb_cf_payload_cap',
-      redactPii: 'custrecord_jj_rb_cf_redact_pii',
       killswitch: 'custrecord_jj_rb_cf_killswitch',
       dryRun: 'custrecord_jj_rb_cf_dryrun',
       // the environment gate — §20.2
@@ -199,6 +198,10 @@ define(['N/search'],
       // An address CAN be updated. Two path parameters: the trading partner and
       // the address within it.
       PARTNER_ADDRESS_UPDATE: { method: 'PUT', path: '/trading_partners/{uuid}/addresses/{address_uuid}' },
+      // Same path as the update, DELETE method — the convention every other
+      // object in this API follows. CONFIRM with TrackTraceRX: the reference
+      // build never deleted an address, so this path is inferred, not observed.
+      PARTNER_ADDRESS_DELETE: { method: 'DELETE', path: '/trading_partners/{uuid}/addresses/{address_uuid}' },
       LOCATION_CREATE: { method: 'POST', path: '/locations' },
       LOCATION_UPDATE: { method: 'PUT', path: '/locations/{uuid}' },
       LOCATION_DELETE: { method: 'DELETE', path: '/locations/{uuid}' },
@@ -206,6 +209,7 @@ define(['N/search'],
       // Location address sync is currently off (location.hasChildren), but the
       // endpoint is declared so switching it back on needs no change here.
       LOCATION_ADDRESS_UPDATE: { method: 'PUT', path: '/locations/{uuid}/addresses/{address_uuid}' },
+      LOCATION_ADDRESS_DELETE: { method: 'DELETE', path: '/locations/{uuid}/addresses/{address_uuid}' },
       STORAGE_AREAS: { method: 'GET', path: '/locations/{uuid}/storage_areas' },
       BIN_CREATE: { method: 'POST', path: '/locations/{locationUuid}/storage_areas' },
       BIN_UPDATE: { method: 'PUT', path: '/locations/{locationUuid}/storage_areas/{uuid}' },
@@ -281,7 +285,8 @@ define(['N/search'],
         endpoints: {
           create: EP.LOCATION_CREATE, update: EP.LOCATION_UPDATE,
           remove: EP.LOCATION_DELETE,
-          child: EP.LOCATION_ADDRESS, childUpdate: EP.LOCATION_ADDRESS_UPDATE
+          child: EP.LOCATION_ADDRESS, childUpdate: EP.LOCATION_ADDRESS_UPDATE,
+          childRemove: EP.LOCATION_ADDRESS_DELETE
         }
       },
 
@@ -357,6 +362,22 @@ define(['N/search'],
       return {
         key: partnerType, syncType: SYNCTYPE[partnerType], builder: 'entity', implemented: true,
         partnerType: partnerType, featureFlag: null, hasChildren: 'addressbook',
+        // A sub-customer. The parent must hold a Middleware UUID before the
+        // child can name it, exactly as for a Location hierarchy.
+        //
+        // CUSTOMER only. `parent` is not a valid search column on VENDOR — the
+        // record type has no parent-vendor hierarchy — and asking for it fails
+        // the whole lookup with "An nlobjSearchColumn contains an invalid
+        // column ... parent", which stops the vendor syncing at all.
+        parentField: partnerType === 'CUSTOMER' ? 'parent' : null,
+        // The native columns this builder reads, beyond the custom fields
+        // above. Per record type, because the two do not expose the same set:
+        // `altname` and `parent` exist on CUSTOMER and not on VENDOR.
+        extraColumns: partnerType === 'CUSTOMER'
+          ? ['entityid', 'companyname', 'isinactive', 'phone', 'email',
+            'isperson', 'altname', 'parent']
+          : ['entityid', 'companyname', 'isinactive', 'phone', 'email',
+            'isperson'],
         logSubjectField: LOG.entity,
         fields: {
           uuid: 'custentity_jj_rb_uuid', payload: 'custentity_jj_rb_payload',
@@ -367,7 +388,8 @@ define(['N/search'],
         endpoints: {
           create: EP.PARTNER_CREATE, update: EP.PARTNER_UPDATE,
           remove: EP.PARTNER_DELETE,
-          child: EP.PARTNER_ADDRESS, childUpdate: EP.PARTNER_ADDRESS_UPDATE
+          child: EP.PARTNER_ADDRESS, childUpdate: EP.PARTNER_ADDRESS_UPDATE,
+          childRemove: EP.PARTNER_ADDRESS_DELETE
         }
       };
     }
@@ -412,7 +434,8 @@ define(['N/search'],
       'custrecord_jj_rb_uom_synced', 'custrecord_jj_rb_uom_last_sync',
       'custrecord_jj_rb_uom_error',
       'custrecord_jj_rb_uom_last_try', 'custrecord_jj_rb_uom_try_result',
-      'custrecord_jj_rb_addr_uuid', 'custrecord_jj_rb_addr_error'
+      'custrecord_jj_rb_addr_uuid', 'custrecord_jj_rb_addr_payload',
+      'custrecord_jj_rb_addr_error'
     ]);
 
     const C = Object.freeze({
@@ -681,7 +704,6 @@ define(['N/search'],
           row.useBins = util.truthy(row.useBins);
           row.useAddress = util.truthy(row.useAddress);
           row.syncInactive = util.truthy(row.syncInactive);
-          row.redactPii = util.truthy(row.redactPii);
           row.allowNonprod = util.truthy(row.allowNonprod);
           row.envLabel = row.envLabelText || 'PRODUCTION';
           row.contentType = row.contentTypeText || 'application/x-www-form-urlencoded';

@@ -40,6 +40,57 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     const dedupe = (a) => a.filter((v, i) => a.indexOf(v) === i);
 
+    /**
+     * search.lookupFields, but a column this account does not expose costs that
+     * one column instead of the whole record.
+     *
+     * NetSuite rejects the ENTIRE lookup when one column is not valid for the
+     * record type — "An nlobjSearchColumn contains an invalid column, or is not
+     * in proper syntax: altname" — and the record then fails to sync for a
+     * reason that has nothing to do with it. Field availability varies by
+     * record type, by account and by enabled features, so a SuiteApp that must
+     * run in accounts it has never seen cannot assume a fixed column list.
+     *
+     * The offending column is named in the message. Drop it, try again, and
+     * report which columns were dropped so the gap is visible in the log rather
+     * than silently changing the payload.
+     */
+    const lookupSafe = (type, id, columns) => {
+      let cols = dedupe((columns || []).filter(Boolean));
+      const dropped = [];
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!cols.length) break;
+        try {
+          const vals = search.lookupFields({ type: type, id: id, columns: cols });
+          if (dropped.length) {
+            log.audit({
+              title: 'RB columns not available on ' + type,
+              details: {
+                recordId: id, dropped: dropped,
+                note: 'These fields are not exposed on this record type in this ' +
+                  'account. They were read as empty.'
+              }
+            });
+          }
+          return { values: vals, dropped: dropped };
+        } catch (e) {
+          const msg = String((e && e.message) || e);
+          // "... is not in proper syntax: altname"  →  altname
+          const m = /invalid column[^:]*:\s*([A-Za-z0-9_.]+)/i.exec(msg);
+          const bad = m && m[1];
+          if (!bad) throw e;                       // a different failure
+          const before = cols.length;
+          cols = cols.filter((c) => c !== bad);
+          if (cols.length === before) throw e;     // named a column we did not ask for
+          dropped.push(bad);
+        }
+      }
+
+      throw new Error('No usable columns remained for ' + type + '/' + id +
+        ' after dropping: ' + dropped.join(', '));
+    };
+
     /** lookupFields gives scalars for text fields and [{value,text}] for selects. */
     const textOf = (v) => {
       if (Array.isArray(v)) return v.length ? (v[0].value || v[0].text || '') : '';
@@ -149,12 +200,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const cols = [];
       Object.keys(f).forEach((k) => { if (f[k]) cols.push(f[k]); });
       if (entry.key === 'DOSAGE') cols.push('name', 'isinactive');
-      if (entry.key === 'CUSTOMER' || entry.key === 'VENDOR')
-        cols.push('entityid', 'companyname', 'isinactive', 'phone', 'email', 'isperson', 'altname');
+      // The native columns are declared on the entry, because Customer and
+      // Vendor do not expose the same ones.
+      (entry.extraColumns || []).forEach((c) => cols.push(c));
 
       let vals = {};
       try {
-        vals = search.lookupFields({ type: recordType, id: recordId, columns: dedupe(cols) });
+        vals = lookupSafe(recordType, recordId, cols).values;
       } catch (e) {
         log.error("Error @ resolveUnits: ", e);
         return {
@@ -324,20 +376,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         create_default_storage_area: true // always true for now
       };
 
-      // The address set belongs in the comparison ONLY while the addresses are
-      // actually pushed. Location address sync is currently off — see
-      // location.hasChildren in jj_rb_core.js — so the Location payload carries
-      // no address summary and the Main Address subrecord is not even read.
-      // Including it would make an address-only edit re-send the Location for
-      // a change that never leaves NetSuite.
-      //
-      // Flip location.hasChildren back to 'addressbook' and this returns with
-      // it. When present it is ALWAYS present, even when empty, so that
-      // deleting the last address still moves the comparison.
-      if (entry.hasChildren) {
-        const addr = locationAddresses(unit);
-        payload[util.COMPARE_KEY] = { addresses: addr.map(compareAddr) };
-      }
+      // No address set in this comparison. An address is its own object in the
+      // Middleware with its own identifier, payload and work item, so an
+      // address edit is an address change, not a Location change. Addresses are
+      // evaluated separately on every save — see maybeSyncAddresses — and that
+      // holds whether Location address sync is on or off.
 
       return payload;
     };
@@ -351,7 +394,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       const f = entry.fields;
       const d = unit.data;
       const isPerson = util.truthy(d.isperson);
-      const name = (isPerson ? txt(d.altname) : txt(d.companyname)) || txt(d.entityid);
+      // `altname` is the person's name on a Customer. A Vendor does not expose
+      // it, so fall through rather than sending an empty name.
+      const name = (isPerson
+        ? (txt(d.altname) || txt(d.companyname))
+        : (txt(d.companyname) || txt(d.altname))) || txt(d.entityid);
 
       // The FULL reference trading-partner key set. Customer and Vendor differ
       // by the `type` value alone. Everything the account does not supply is
@@ -363,18 +410,24 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         gs1_company_id: '',
         gs1_sgln: '',
         type: entry.partnerType,                    // CUSTOMER | VENDOR
-        parent_tp_uuid: '',
+        // The parent trading partner, for a sub-customer or sub-vendor. Empty
+        // when the NetSuite record has no parent.
+        parent_tp_uuid: txt(unit.parentUuid),
         customer_id: txt(d.entityid),
         friendly_name: '',
-        default_billing_address_uuid: '',
-        default_shipping_address_uuid: '',
+        // Named by ADDRESS UUID, so they can only be filled once the address
+        // itself has been accepted. On an UPDATE the address pass has already
+        // run by the time this payload is built, so the identifiers are here.
+        // On a CREATE they cannot be: the addresses do not exist remotely yet.
+        // Those go out empty and refreshPartnerDefaults fills them in.
+        default_billing_address_uuid: defaultAddressUuid(unit, cfg, entry, 'defaultBilling'),
+        default_shipping_address_uuid: defaultAddressUuid(unit, cfg, entry, 'defaultShipping'),
         phone: txt(d.phone),
         phone_ext: '',
         notification_email: txt(d.email),
-        // The reference build hardcodes ALL, subscribing every partner to every
-        // notification. NONE is a configuration decision, not a property of the
-        // partner, so it is the safer default.
-        new_trx_notification_type: 'NONE',
+        // As in the reference build: every partner is subscribed to every
+        // notification.
+        new_trx_notification_type: 'ALL',
         flag_notification_name: '',
         flag_notification_email: '',
         flag_notification_phone: '',
@@ -399,10 +452,14 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         omit_comm_aggr_in_epcis: false
       };
 
-      // Always present, even when empty — see buildLocation.
-      const addrs = entityAddresses(unit);
-      payload[util.COMPARE_KEY] = { addresses: addrs.map(compareAddr) };
-
+      // The address set is deliberately NOT folded into this comparison.
+      // An address is its own object in the Middleware with its own identifier,
+      // its own payload and its own work item, so an address edit is an address
+      // change — not a change to the customer or vendor. Including it here made
+      // every address edit re-send the parent for data that had not moved.
+      //
+      // Addresses are evaluated separately, on every save, in
+      // syncChildAddresses. They no longer depend on the parent calling out.
       return payload;
     };
 
@@ -546,10 +603,6 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     };
 
     /** The address fields that belong in the parent's comparison. */
-    const compareAddr = (a) => ({
-      nickname: a.nickname, addressee: a.addressee, line1: a.addr1, line2: a.addr2,
-      city: a.city, state: a.state, zip: a.zip, country: a.country, sgln: a.sgln
-    });
 
     const builders = {
       dosage: buildDosageForm,
@@ -675,27 +728,77 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           return;
         }
 
-        // Location: the parent must exist remotely before the child can name it.
-        if (entry.key === 'LOCATION') {
-          const parentId = textOf(unit.data.parent);
-          if (parentId) {
-            const pu = ensureParentLocation(parentId, cfg, correlation);
+        // ── step 1b: ADDRESSES FIRST when the parent is already known to the
+        //    Middleware.
+        //
+        //    The trading-partner payload names its default billing and shipping
+        //    addresses BY ADDRESS UUID, so the parent payload depends on the
+        //    addresses, not the other way round. Building the parent first
+        //    costs two calls for one edit: the first goes out with the default
+        //    still empty because the new address has no UUID yet, the address
+        //    pass then creates it, and the UUID that comes back changes the
+        //    parent payload a second time.
+        //
+        //    Sending the addresses first collapses that into one call — by the
+        //    time the parent payload is built, every address that could appear
+        //    in it already has its identifier.
+        //
+        //    A parent with no UUID cannot do this: an address is created UNDER
+        //    its parent, so the parent has to exist remotely first. That case
+        //    keeps the old order and pays for the follow-up update in
+        //    refreshPartnerDefaults.
+        //
+        //    BEFORE the parent-hierarchy block below, deliberately. An address
+        //    belongs to THIS record and does not name the record's own parent,
+        //    so a sub-customer whose parent has not synced yet must still be
+        //    able to push its address changes. Blocking those too would strand
+        //    them until someone syncs an unrelated record.
+        if (entry.hasChildren && cfg.useAddress && !util.blank(unit.storedUuid)
+          && !willRemoveRemotely(unit, cfg)) {
+          let addressesWritten = false;
+          try {
+            addressesWritten = maybeSyncAddresses(entry, unit, cfg, correlation, trigger, unit.storedUuid, false);
+          } catch (e) {
+            // The address pass now runs BEFORE the parent call, so anything
+            // escaping it would stop the parent syncing at all — a regression
+            // on the old order, where the parent went first. The addresses log
+            // their own failures; this is the last net under them.
+            log.error('Error @ address pre-pass ' + unit.recordType + '/' + unit.recordId, e);
+            logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
+          }
+
+          // Writing a UUID back onto an address line saves the parent, which
+          // re-fires the User Event; that nested run may have sent the parent
+          // update already. Re-read what the record holds NOW, so the
+          // comparison below is against the Middleware's latest state and not
+          // against values read before the address pass. Only when something
+          // was written — otherwise nothing can have moved.
+          if (addressesWritten) refreshStoredState(entry, unit);
+        }
+
+        // A hierarchical record must not name a parent the Middleware has
+        // never seen. Location names its parent location; a sub-customer or
+        // sub-vendor names its parent trading partner.
+        if (entry.parentField) {
+          const parentId = textOf(unit.data[entry.parentField]);
+          if (parentId && String(parentId) !== String(unit.recordId)) {
+            const pu = ensureParentRecord(entry, unit.recordType, parentId, cfg, correlation);
             if (!pu) {
+              const what = entry.key === 'LOCATION' ? 'location' : 'trading partner';
               logIo.openDeferred({
                 entry: entry, unit: unit, cfg: cfg,
                 reason: C.REASON.MISSING_PARENT,
                 status: C.STATUS.OPEN_PENDING,     // resolves once the parent syncs
                 outcome: C.OUTCOME.SKIPPED,
                 trigger: trigger,
-                note: 'Parent location ' + textOf(unit.data.parent) +
-                  ' has no Middleware UUID yet.',
+                note: 'Parent ' + what + ' ' + parentId + ' has no Middleware UUID yet.',
                 correlation: correlation
               });
               logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT, null,
-                'The parent location (' + textOf(unit.data.parent) + ') has no ' +
-                'Middleware UUID yet, so this location cannot name its parent. ' +
-                'Sync the parent location first.');
-              results.push({ ok: false, blocked: 'parent location not synced' });
+                'The parent ' + what + ' (' + parentId + ') has no Middleware ' +
+                'UUID yet, so this record cannot name its parent. Sync the ' +
+                'parent first.');
+              results.push({ ok: false, blocked: 'parent not synced' });
               return;
             }
             unit.parentUuid = pu;
@@ -730,6 +833,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             'opened for no longer exists.');
           logIo.stampTry(unit, C.TRY.NO_CHANGE, null, '');
           results.push({ skipped: true, noChange: true });
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, null, true);
           return;
         }
 
@@ -816,6 +920,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             'item was opened for no longer exists.');
           healFromLog(entry, unit, payloadStr);
           results.push({ skipped: true, noChange: true, fromLog: true });
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, null, true);
           return;
         }
 
@@ -889,9 +994,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.closeSuccess(target, res);
           results.push({ ok: true, uuid: finalUuid });
 
-          if (entry.hasChildren && cfg.useAddress)
-            syncChildAddresses(entry, unit, res.uuid || unit.storedUuid, cfg,
-              correlation, trigger);
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, res.uuid || unit.storedUuid, true);
 
         } else if (res.suppressed || res.dryRun) {
           // Built, stringified, logged, not sent. Nothing is coming back for
@@ -904,6 +1007,16 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
           results.push({ ok: false, suppressed: true });
 
+          // Dry run has to show EVERY call the save would have made, not only
+          // the parent's; the environment gate is treated the same way.
+          //
+          // Usually a no-op now, because a record that HAS a UUID ran its
+          // address pass before the parent payload was built and the
+          // once-per-unit guard stops it running twice. It stays because that
+          // pre-pass has conditions of its own: lose any of them and this is
+          // the only thing that still shows the addresses in a dry run.
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, null, true);
+
         } else if (res.skipped) {
           // Kill switch. The change is real and STILL UNSENT, so the work item
           // stays open on purpose — but parked, not "retrying".
@@ -912,6 +1025,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null,
             res.errorMessage || 'Kill switch is on; no call was made.');
           results.push({ ok: false, skipped: true });
+
+          // Same reasoning as the dry-run branch above, and the same caveat:
+          // normally the pre-pass has already run and this is a no-op.
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, null, true);
 
         } else {
           writeBackFailure(entry, unit, res.errorMessage);
@@ -1088,6 +1205,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      */
     const deleteOnInactivate = (cfg) =>
       String((cfg && cfg.inactiveMethod) || '').toUpperCase().indexOf('DELETE') !== -1;
+
+    /**
+     * True when this save is going to remove the record from the Middleware
+     * rather than update it — an inactivation under `Inactivate Method =
+     * DELETE`.
+     *
+     * Checked before the address pre-pass: pushing addresses onto a parent that
+     * is about to be deleted spends calls on children that vanish with it.
+     */
+    const willRemoveRemotely = (unit, cfg) =>
+      util.truthy(unit.data && unit.data.isinactive) && deleteOnInactivate(cfg);
 
     /**
      * Inactivation expressed as a remote DELETE.
@@ -1311,6 +1439,15 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           options: { ignoreMandatoryFields: true }
         });
 
+        // Keep the in-memory unit in step with the record that was just
+        // written. Anything running later in this same execution — the address
+        // pass, refreshPartnerDefaults, operationFor — must compare against
+        // what the Middleware has now ACCEPTED, not against the values that
+        // were read before the call.
+        if (uuid) unit.storedUuid = uuid;
+        unit.storedPayload = payloadStr;
+        unit.storedSynced = true;
+
         if (entry.key === 'LOCATION' && unit.recordType === 'location' && uuid && cfg) {
           syncLocationStorageArea(entry, unit, cfg, uuid);
         }
@@ -1391,34 +1528,52 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     // Location parent cascade — §10.9
     // ═══════════════════════════════════════════════════════════════════════════
 
-    const ensureParentLocation = (parentId, cfg, correlation) => {
-      const entry = C.MASTER.location;
-      const key = 'location|' + parentId;
-      try {
-        const v = search.lookupFields({
-          type: 'location', id: parentId,
-          columns: [entry.fields.uuid]
-        });
-        const uuid = textOf(v[entry.fields.uuid]);
-        if (uuid) return uuid;
-      } catch (e) { return null; }
+    /**
+     * The Middleware UUID of a parent record, synchronizing it first if it does
+     * not have one yet.
+     *
+     * Used by Location (its own hierarchy) and by Customer and Vendor (a
+     * sub-customer or sub-vendor naming its parent trading partner). Same rule
+     * in both: a child cannot name a parent the Middleware has never seen.
+     *
+     * The pre-sync is attempted once per parent per execution, so a cycle in
+     * the data cannot produce an endless cascade.
+     */
+    const ensureParentRecord = (parentEntry, parentType, parentId, cfg, correlation) => {
+      if (!parentEntry || !parentEntry.fields || !parentEntry.fields.uuid) return null;
+      const key = parentType + '|' + parentId;
+
+      const readUuid = () => {
+        try {
+          const v = search.lookupFields({
+            type: parentType, id: parentId, columns: [parentEntry.fields.uuid]
+          });
+          return textOf(v[parentEntry.fields.uuid]) || null;
+        } catch (e) { return null; }
+      };
+
+      const existing = readUuid();
+      if (existing) return existing;
 
       if (PRESYNCED[key]) return null;      // already tried in this execution
       PRESYNCED[key] = true;
 
+      log.audit({
+        title: 'RB pre-syncing parent ' + parentType + '/' + parentId,
+        details: 'the child cannot be sent until the parent holds a UUID'
+      });
+
       run({
-        entry: entry, recordId: parentId, recordType: 'location', cfg: cfg,
+        entry: parentEntry, recordId: parentId, recordType: parentType, cfg: cfg,
         trigger: C.TRIGGER.PRESYNC, correlation: correlation
       });
 
-      try {
-        const v2 = search.lookupFields({
-          type: 'location', id: parentId,
-          columns: [entry.fields.uuid]
-        });
-        return textOf(v2[entry.fields.uuid]) || null;
-      } catch (e) { return null; }
+      return readUuid();
     };
+
+    /** Kept for callers that name the Location case directly. */
+    const ensureParentLocation = (parentId, cfg, correlation) =>
+      ensureParentRecord(C.MASTER.location, 'location', parentId, cfg, correlation);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Addresses — §10.5
@@ -1506,7 +1661,20 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           } catch (e) { /* not exposed on this record type */ }
 
           const a = addrFromSub(sub, label || ('Address ' + (i + 1)), i, nsId);
-          if (a) unit.addresses.push(a);
+          if (a) {
+            // Which line is the default billing and which the default shipping.
+            // The Middleware names them by ADDRESS UUID, so the flags are read
+            // here and resolved to UUIDs once the addresses have been synced.
+            try {
+              a.defaultBilling = util.truthy(rec.getSublistValue({
+                sublistId: 'addressbook', fieldId: 'defaultbilling', line: i
+              }));
+              a.defaultShipping = util.truthy(rec.getSublistValue({
+                sublistId: 'addressbook', fieldId: 'defaultshipping', line: i
+              }));
+            } catch (e) { /* not on this record type */ }
+            unit.addresses.push(a);
+          }
         }
       } catch (e) {
         logIo.exception(null, { type: unit.recordType, id: unit.recordId }, e);
@@ -1521,6 +1689,308 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * After the parent has an identifier, push its addresses — each its own call
      * and its own work item, capped at max_inline.
      */
+    /**
+     * Addresses are evaluated on EVERY save of the parent, whether or not the
+     * parent itself had anything to send.
+     *
+     * The parent's own comparison no longer carries the address set, so a save
+     * that changes only an address is a no-change for the parent — and if the
+     * address pass only ran after a successful parent call, that address would
+     * never be sent at all.
+     */
+    /**
+     * Delete remotely the addresses that no longer exist in NetSuite.
+     *
+     * Every address the Middleware has accepted is listed in the Sync Log under
+     * this parent, keyed by the NetSuite address id. Any of those ids that is
+     * not among the lines present now has been removed from the address book,
+     * and its remote counterpart is an orphan that would otherwise stay on a
+     * trading partner for ever.
+     *
+     * A 404 counts as done — already gone is the outcome that was asked for.
+     */
+    const deleteRemovedAddresses = (entry, unit, current, parentUuid, cfg, correlation, trigger) => {
+
+      const endpoint = entry.endpoints && entry.endpoints.childRemove;
+      if (!endpoint) return;
+
+      const lines = current || [];
+      const live = {};
+      lines.forEach((a) => { if (a.nsId) live[String(a.nsId)] = true; });
+
+      // A line whose NetSuite address id could not be read is indistinguishable
+      // from a line that is gone — and the Sync Log key falls back to the line
+      // position when the id is missing, so the two keyspaces stop matching. In
+      // an account where `internalid` is not exposed on the addressbook
+      // sublist, EVERY accepted address would then look removed and be deleted
+      // remotely while it is still sitting on the record. Deleting is not
+      // reversible, so an unreadable id stops the diff instead of driving it.
+      const unidentified = lines.filter((a) => !a.nsId).length;
+      if (unidentified) {
+        log.audit({
+          title: 'RB address delete check skipped',
+          details: {
+            recordType: unit.recordType, recordId: unit.recordId,
+            linesWithoutInternalId: unidentified,
+            note: 'Cannot tell a removed address from one whose NetSuite ' +
+              'internal id could not be read, so nothing is deleted remotely.'
+          }
+        });
+        return;
+      }
+
+      const accepted = logIo.syncedAddresses(unit.recordType, unit.recordId);
+      const gone = accepted.filter((a) => a.nsAddressId && !live[a.nsAddressId]);
+      if (!gone.length) return;
+
+      log.audit({
+        title: 'RB addresses removed in NetSuite',
+        details: {
+          recordType: unit.recordType, recordId: unit.recordId,
+          removing: gone.map((a) => a.nsAddressId)
+        }
+      });
+
+      const addrEntry = {
+        key: 'ADDRESS', syncType: C.SYNCTYPE.ADDRESS, builder: 'address',
+        implemented: true, logSubjectField: entry.logSubjectField,
+        fields: {}, endpoints: { remove: endpoint }
+      };
+
+      gone.forEach((a) => {
+        const addrUnit = Object.assign({
+          recordType: unit.recordType, recordId: unit.recordId, uomId: null,
+          logNsId: a.logNsId,
+          storedUuid: a.uuid || null, storedPayload: null, storedSynced: true,
+          // The NetSuite address line is already gone, so there is nothing left
+          // to write back to. Its work item is the only place this is recorded.
+          subjectDeleted: true,
+          data: {}
+        }, unitFields({}));
+
+        if (util.blank(a.uuid)) {
+          // Accepted once but never identified. Nothing can be addressed.
+          logIo.recordNoCall({
+            entry: addrEntry, unit: addrUnit, cfg: cfg,
+            operation: C.OPERATION.DELETE,
+            status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger, correlation: correlation,
+            reason: C.REASON.AWAITING_DECISION,
+            note: 'NetSuite address ' + a.nsAddressId + ' was deleted, but no ' +
+              'Middleware UUID was ever recorded for it, so it cannot be ' +
+              'removed remotely. Delete it in TrackTraceRX by hand.'
+          });
+          return;
+        }
+
+        // Any work item still open for this address is dead — nothing will ever
+        // sync that line again.
+        logIo.closeStaleWorkItem(addrUnit,
+          'Cancelled: the NetSuite address line was deleted.',
+          C.STATUS.CLOSED_CANCELLED);
+
+        const target = logIo.resolveLogTarget({
+          entry: addrEntry, unit: addrUnit, operation: C.OPERATION.DELETE,
+          payload: '', cfg: cfg, correlation: correlation
+        });
+
+        const res = client.call({
+          entry: addrEntry, unit: addrUnit, cfg: cfg, target: target,
+          endpoint: endpoint,
+          pathParams: { uuid: parentUuid, address_uuid: a.uuid },
+          body: null, operation: C.OPERATION.DELETE, payload: '',
+          trigger: trigger, correlation: correlation, requestUuid: correlation
+        });
+
+        log.debug({
+          title: 'RB address delete ' + a.uuid,
+          details: {
+            nsAddressId: a.nsAddressId, ok: res.ok, httpStatus: res.httpStatus
+          }
+        });
+
+        if (res.ok || res.httpStatus === 404) logIo.closeSuccess(target, res);
+        else if (res.suppressed || res.dryRun)
+          logIo.closeNoAction(target, res,
+            res.suppressed
+              ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+              : 'Dry-run mode is on; the address delete was not sent.');
+        else if (res.skipped)
+          logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+            res.errorMessage || 'Kill switch is on; the address delete was not sent.');
+        else
+          // No retry path: the NetSuite line is gone, so nothing will rebuild
+          // this payload. It needs a person.
+          logIo.closeNeedsReview(target, res,
+            'The NetSuite address line was deleted but the Middleware refused ' +
+            'the delete: ' + (res.errorMessage || 'no message') + '.',
+            'Delete address ' + a.uuid + ' under ' + parentUuid + ' in ' +
+            'TrackTraceRX by hand. NetSuite cannot retry this \u2014 the address ' +
+            'line it belonged to no longer exists.');
+      });
+    };
+
+    /**
+     * Re-read the record's sync-control state: the UUID the Middleware issued
+     * and the payload it last accepted.
+     *
+     * Needed because the address pass writes a UUID back onto an address line,
+     * and that write saves the PARENT record, which re-fires the User Event. A
+     * nested run can therefore have sent the parent update and moved the stored
+     * payload on while this execution still holds the values it read at the
+     * start. Comparing against the stale copy sends the same call twice.
+     */
+    const refreshStoredState = (entry, unit) => {
+      const f = entry.fields || {};
+      if (!f.payload) return;
+      try {
+        const fresh = lookupSafe(unit.recordType, unit.recordId,
+          [f.payload, f.uuid, f.synced]).values;
+        unit.storedPayload = textOf(fresh[f.payload]) || null;
+        if (f.uuid) {
+          const freshUuid = textOf(fresh[f.uuid]);
+          if (freshUuid) unit.storedUuid = freshUuid;
+        }
+        if (f.synced) unit.storedSynced = util.truthy(fresh[f.synced]);
+      } catch (e) {
+        log.error('Error @ refreshStoredState: ' +
+          unit.recordType + '/' + unit.recordId, e);
+      }
+    };
+
+    /**
+     * The Middleware UUID of the address line flagged as the default billing or
+     * default shipping address. Empty when the flag is not set on any line, or
+     * when the line it is set on has not been accepted yet.
+     */
+    const defaultAddressUuid = (unit, cfg, entry, flag) => {
+      // Address sync off ⇒ no address is ours to name, and reading the address
+      // book would cost a record.load on every partner build for nothing.
+      if (!cfg || cfg.useAddress !== true) return '';
+      if (!entry || !entry.hasChildren) return '';
+      const addrs = entityAddresses(unit);
+      for (let i = 0; i < addrs.length; i++)
+        if (addrs[i][flag] && !util.blank(addrs[i].uuid)) return String(addrs[i].uuid);
+      return '';
+    };
+
+    /**
+     * The follow-up update that names the default billing and shipping
+     * addresses on the trading partner.
+     *
+     * THE CREATE PATH ONLY. A partner that already holds a UUID has its
+     * addresses synced BEFORE its own payload is built (see step 1b in run), so
+     * the identifiers are in the first and only call and this does nothing.
+     *
+     * A partner being created cannot work that way: an address is created under
+     * its parent, so the parent must exist remotely first. Its create therefore
+     * goes out with both defaults empty, the address pass creates the addresses,
+     * and the partner is then told which of them is which.
+     *
+     * Nothing special is needed to avoid a loop: the payload comparison decides
+     * whether this call happens at all, and after it succeeds the stored
+     * payload matches, so the next save is a no-change.
+     */
+    const refreshPartnerDefaults = (entry, unit, cfg, correlation, trigger, parentUuid, addressesWritten) => {
+      if (entry.key !== 'CUSTOMER' && entry.key !== 'VENDOR') return;
+      if (util.blank(parentUuid)) return;
+      if (!entry.endpoints || !entry.endpoints.update) return;
+
+      // Re-read the address lines: the pass that has just run may have written
+      // a UUID onto one of them, and the cached copy predates that.
+      unit.addresses = undefined;
+
+      // Only if an address line was written: that save re-fires the User
+      // Event, and the nested run it starts may have sent this update already.
+      if (addressesWritten) refreshStoredState(entry, unit);
+
+      const payload = builders[entry.builder](unit, cfg, entry);
+      const payloadStr = util.canonicalCompare(payload);
+
+      if (util.samePayload(payloadStr, unit.storedPayload)) {
+        log.debug({
+          title: 'RB default addresses unchanged ' + unit.recordType + '/' + unit.recordId,
+          details: {
+            billing: payload.default_billing_address_uuid || null,
+            shipping: payload.default_shipping_address_uuid || null
+          }
+        });
+        return;
+      }
+
+      log.audit({
+        title: 'RB updating default addresses on ' + unit.recordType + '/' + unit.recordId,
+        details: {
+          billing: payload.default_billing_address_uuid || null,
+          shipping: payload.default_shipping_address_uuid || null
+        }
+      });
+
+      const target = logIo.resolveLogTarget({
+        entry: entry, unit: unit, operation: C.OPERATION.UPDATE,
+        payload: payloadStr, cfg: cfg, reason: C.REASON.PAYLOAD_CHANGED,
+        correlation: correlation
+      });
+
+      const res = client.call({
+        entry: entry, unit: unit, cfg: cfg, target: target,
+        endpoint: entry.endpoints.update, pathParams: { uuid: parentUuid },
+        body: util.stripCompare(payload), operation: C.OPERATION.UPDATE,
+        payload: payloadStr, trigger: trigger,
+        correlation: correlation, requestUuid: correlation
+      });
+
+      if (res.ok) {
+        writeBackSuccess(entry, unit, parentUuid, payloadStr, cfg);
+        logIo.closeSuccess(target, res);
+      } else if (res.suppressed || res.dryRun) {
+        logIo.closeNoAction(target, res,
+          res.suppressed
+            ? 'Environment gate: ' + (res.errorMessage || 'call suppressed') + '.'
+            : 'Dry-run mode is on; the default-address update was not sent.');
+      } else if (res.skipped) {
+        logIo.parkUnsent(target, res, cfg, C.REASON.AWAITING_DECISION,
+          res.errorMessage || 'Kill switch is on; no call was made.');
+      } else {
+        writeBackFailure(entry, unit, res.errorMessage);
+        logIo.closeFailure(target, res, cfg);
+      }
+    };
+
+    /**
+     * The address pass. Runs ONCE per unit per execution.
+     *
+     * It is called from both sides of the parent call — before it when the
+     * parent already has a UUID, after it on every exit of the parent when it
+     * did not — and whichever side gets there first is the one that runs. The
+     * guard is what lets the pre-pass exist without every post-parent exit
+     * having to know whether it already happened.
+     *
+     * @param {boolean} afterParent  true when the parent call has already been
+     *   decided in this execution. Only then can the default billing and
+     *   shipping addresses need a follow-up update: the parent payload was
+     *   built before the addresses had identifiers.
+     */
+    const maybeSyncAddresses = (entry, unit, cfg, correlation, trigger, parentUuid, afterParent) => {
+      if (!entry.hasChildren || !cfg.useAddress) return false;
+      if (unit.addressesDone) return false;  // the pre-pass already ran
+      const uuid = parentUuid || unit.storedUuid;
+      if (util.blank(uuid)) return false;    // nothing to hang an address on yet
+      unit.addressesDone = true;
+
+      const wrote = syncChildAddresses(entry, unit, uuid, cfg, correlation, trigger);
+
+      // Only when the parent went out first. Running before the parent, the
+      // addresses already hold their identifiers and the parent payload built
+      // straight after this picks them up — no follow-up call, and no second
+      // sync of the same trading partner for one edit.
+      if (afterParent)
+        refreshPartnerDefaults(entry, unit, cfg, correlation, trigger, uuid,
+          wrote === true);
+
+      return wrote === true;
+    };
+
     const syncChildAddresses = (entry, unit, parentUuid, cfg, correlation, trigger) => {
       log.debug("RB syncChildAddresses");
       // The caller already checks entry.hasChildren; this is the second lock on
@@ -1538,25 +2008,30 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
       log.debug("Addresses to sync", addrs);
 
-      if (!addrs.length) {
-        // Not an error and not a silence. A Location with an empty Main
-        // Address, or an entity with no address book line that has a street,
-        // city or postal code, simply has nothing to push. The parent is
-        // already synchronized; there is no work item to open and nothing to
-        // stamp, because an address is not a NetSuite record of its own.
-        log.debug({
-          title: 'RB no addresses to sync ' + unit.recordType + '/' + unit.recordId,
-          details: 'no address line carries a street, city or postal code'
+      if (util.blank(parentUuid)) {
+        // Every address endpoint is addressed by the parent. Without the parent
+        // UUID there is nothing to send anything to.
+        log.audit({
+          title: 'RB addresses not sent: parent has no UUID',
+          details: { recordType: unit.recordType, recordId: unit.recordId }
         });
         return;
       }
 
-      if (util.blank(parentUuid)) {
-        // The address endpoint is addressed by the parent. Without the parent
-        // UUID there is nothing to POST to.
-        log.audit({
-          title: 'RB addresses not sent: parent has no UUID',
-          details: { recordType: unit.recordType, recordId: unit.recordId }
+      // ── Removed addresses FIRST, and before the empty check below.
+      //    NetSuite raises no event for a deleted address book line: it is
+      //    simply absent on the next save. The only record of what used to be
+      //    there is the Sync Log, so that is what is compared. Deleting the
+      //    LAST address leaves this list empty, which is exactly the case an
+      //    early return on `addrs.length` would have skipped.
+      deleteRemovedAddresses(entry, unit, addrs, parentUuid, cfg, correlation, trigger);
+
+      if (!addrs.length) {
+        // Not an error and not a silence. An entity with no address book line
+        // carrying a street, city or postal code simply has nothing to push.
+        log.debug({
+          title: 'RB no addresses to sync ' + unit.recordType + '/' + unit.recordId,
+          details: 'no address line carries a street, city or postal code'
         });
         return;
       }
@@ -1575,7 +2050,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         }
       };
 
-      addrs.forEach((addr, i) => {
+      // Every write-back is buffered and applied in ONE save at the end.
+      //
+      // Saving the parent per address re-fired the User Event per address, and
+      // each of those nested runs rebuilt the trading-partner payload from a
+      // half-finished set of address UUIDs — which is how one edit could send
+      // the partner more than once. One save at the end means one nested run,
+      // and it sees every identifier already in place.
+      const pendingWrites = [];
+      let sent = 0;
+
+      addrs.forEach((addr) => {
         const body = buildAddress(addr, cfg, parentName);
         const addrPayload = util.canonicalCompare(body);
 
@@ -1585,10 +2070,15 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         //    no update. Re-POSTing an unchanged address is not a wasted call,
         //    it is a DUPLICATE address in the Middleware — and every edit to
         //    the parent used to do exactly that to every one of its addresses.
-        if (!util.blank(addr.uuid) && util.samePayload(addrPayload, addr.payload)) {
+        // The stored payload is written ONLY after the Middleware accepted the
+        // address, so a match means "already sent" — with or without a UUID
+        // having come back with it. Requiring the UUID as well is what made an
+        // address that was accepted without one get POSTed again on every
+        // parent save, leaving one more duplicate each time.
+        if (util.samePayload(addrPayload, addr.payload)) {
           log.debug({
             title: 'RB address unchanged ' + unit.recordType + '/' + unit.recordId,
-            details: { nsAddressId: addr.nsId || null, uuid: addr.uuid }
+            details: { nsAddressId: addr.nsId || null, uuid: addr.uuid || null }
           });
           return;
         }
@@ -1607,18 +2097,20 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         log.debug("RB address unit", addrUnit);
 
-        if (i >= cap) {
+        // The cap limits CALLS, not line positions. Counting positions meant an
+        // entity with eight addresses of which only the last had changed
+        // deferred that one change while making no calls at all.
+        if (sent >= cap) {
           logIo.openDeferred({
             entry: addrEntry, unit: addrUnit, cfg: cfg,
             reason: C.REASON.PAYLOAD_CHANGED,
             status: C.STATUS.OPEN_PENDING, outcome: C.OUTCOME.SKIPPED,
             trigger: trigger, payload: addrPayload,
-            note: 'Beyond the inline cap of ' + cap + ' addresses for this save.',
+            note: 'Beyond the inline cap of ' + cap + ' address calls for this save.',
             correlation: correlation
           });
           return;
         }
-
         // ── Create or update, decided the same way as every other subject:
         //    by whether this address already holds a UUID.
         //
@@ -1642,12 +2134,16 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               'would add a duplicate.',
             correlation: correlation
           });
-          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
-            [C.ADDR.error]: 'Changed after acceptance and no address update ' +
-              'endpoint is configured for ' + entry.key + '.'
+          pendingWrites.push({
+            addr: addr, values: {
+              [C.ADDR.error]: 'Changed after acceptance and no address update ' +
+                'endpoint is configured for ' + entry.key + '.'
+            }
           });
           return;
         }
+
+        sent++;        // counted here: a call is now certain
 
         const operation = isUpdate ? C.OPERATION.UPDATE : C.OPERATION.CREATE;
 
@@ -1693,9 +2189,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               'Read the address UUID from TrackTraceRX and enter it in the ' +
               'RapidBridge External UUID field on this address line. Until ' +
               'then every parent edit will create another copy of it.');
-            writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
-              [C.ADDR.error]: 'Accepted by the Middleware but no UUID was ' +
-                'returned. Enter it by hand before editing this record again.'
+            // The payload IS stored here, unlike on a failure. The address
+            // was accepted; what is missing is its identifier. Without the
+            // payload the next pass sees it as changed and POSTs it again,
+            // leaving a duplicate in the Middleware every time the parent is
+            // saved — the exact outcome the work item above is warning about.
+            pendingWrites.push({
+              addr: addr, values: {
+                [C.ADDR.payload]: addrPayload,
+                [C.ADDR.error]: 'Accepted by the Middleware but no UUID was ' +
+                  'returned. Enter it by hand before editing this record again.'
+              }
             });
 
             log.debug("RB address accepted but no UUID returned", {
@@ -1706,12 +2210,21 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           }
 
           logIo.closeSuccess(target, res);
+          // Hold the identifier on the in-memory line too. The parent payload
+          // built after this pass names its default billing and shipping
+          // addresses by UUID and reads them from this same list; without this
+          // it would read the line as still unidentified and the default would
+          // go out empty.
+          addr.uuid = newUuid;
+          addr.payload = addrPayload;
           // One save: the identifier, what was accepted, the NetSuite address
           // id and a cleared error.
-          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
-            [C.ADDR.uuid]: newUuid,
-            [C.ADDR.payload]: addrPayload,
-            [C.ADDR.error]: ''
+          pendingWrites.push({
+            addr: addr, values: {
+              [C.ADDR.uuid]: newUuid,
+              [C.ADDR.payload]: addrPayload,
+              [C.ADDR.error]: ''
+            }
           });
 
           log.debug("RB address accepted and written back", {
@@ -1731,8 +2244,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.closeFailure(target, res, cfg);
           // The payload is deliberately NOT written on a failure, so the next
           // save tries again instead of comparing equal for ever.
-          writeAddressValues(entry, unit.recordType, unit.recordId, addr, {
-            [C.ADDR.error]: util.clip(res.errorMessage, 900)
+          pendingWrites.push({
+            addr: addr, values: {
+              [C.ADDR.error]: util.clip(res.errorMessage, 900)
+            }
           });
 
           log.debug("RB address failed to sync", {
@@ -1742,63 +2257,99 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           });
         }
       });
+
+      return flushAddressWrites(entry, unit.recordType, unit.recordId, pendingWrites);
     };
 
     /**
-     * Write one field on an address subrecord.
+     * Apply every buffered address write-back in ONE load and ONE save.
      *
-     * This re-fires the User Event. That is safe and self-limiting: the second
-     * pass rebuilds the same payload, the stored string matches, and it stamps
-     * `No change` without calling out. The payload comparison IS the loop
-     * breaker (§2.2).
-     */
-    /**
-     * Write several values onto ONE address subrecord in ONE load and save.
+     * Two reasons this is batched rather than done per address:
      *
-     * Each save of the parent re-fires the User Event, so writing the uuid and
-     * the payload and the error as three separate saves meant three extra
-     * executions per address. The payload comparison stops them doing any work,
-     * but they still cost governance and fill the execution log.
+     *   1. Correctness. Saving the parent re-fires its User Event. A save per
+     *      address meant a nested run per address, each rebuilding the trading
+     *      partner from a partly-identified address set, and each able to send
+     *      the partner again. One save means one nested run, and by then every
+     *      address holds its identifier.
+     *   2. Cost. Three fields on three addresses used to be nine executions.
+     *
+     * A field that is not deployed on the Address record is logged and skipped;
+     * it must not cost the rest of the write-back, the UUID above all.
+     *
+     * @param {Array<{addr:Object, values:Object}>} writes
      */
-    const writeAddressValues = (entry, recordType, recordId, addr, values) => {
-      log.debug("Write Address Values", { details: { recordType: recordType, recordId: recordId, line: addr.line, values: values } });
-      const keys = Object.keys(values || {});
-      if (!keys.length) return false;
+    const flushAddressWrites = (entry, recordType, recordId, writes) => {
+      const list = (writes || []).filter(
+        (w) => w && w.values && Object.keys(w.values).length);
+      if (!list.length) return false;
+
+      log.debug({
+        title: 'RB address write-back (batched)',
+        details: {
+          recordType: recordType, recordId: recordId, addresses: list.length,
+          lines: list.map((w) => w.addr.line)
+        }
+      });
+
       try {
         const rec = record.load({ type: recordType, id: recordId, isDynamic: false });
-        const line = addr.line;
-        const sub = (line === null || line === undefined)
-          ? rec.getSubrecord({ fieldId: 'mainaddress' })
-          : rec.getSublistSubrecord({
-            sublistId: 'addressbook',
-            fieldId: 'addressbookaddress', line: line
-          });
-        if (!sub) {
-          log.error({
-            title: 'RB address write-back found no subrecord',
-            details: { recordType: recordType, recordId: recordId, line: line }
-          });
-          return false;
-        }
-        keys.forEach((f) => {
-          try { sub.setValue({ fieldId: f, value: values[f] }); }
-          catch (e) {
-            // A field that is not deployed on the Address record must not cost
-            // us the rest of the write-back — the UUID above all.
+        let applied = 0;
+
+        list.forEach((w) => {
+          const line = w.addr.line;
+          let sub = null;
+          try {
+            sub = (line === null || line === undefined)
+              ? rec.getSubrecord({ fieldId: 'mainaddress' })
+              : rec.getSublistSubrecord({
+                sublistId: 'addressbook',
+                fieldId: 'addressbookaddress', line: line
+              });
+          } catch (e) { sub = null; }
+
+          if (!sub) {
             log.error({
-              title: 'RB address field not writable: ' + f,
-              details: (e && e.message) || String(e)
+              title: 'RB address write-back found no subrecord',
+              details: { recordType: recordType, recordId: recordId, line: line }
             });
+            return;
           }
+
+          Object.keys(w.values).forEach((f) => {
+            try {
+              // Only a REAL change counts, and only a real change saves.
+              //
+              // This save re-fires the User Event. Writing a value that is
+              // already there still saves, still re-fires, and the next pass
+              // writes the same value again — an error message that never
+              // clears is enough to make that a loop, and on the
+              // accepted-without-a-UUID path every turn of it POSTs the
+              // address again and leaves another duplicate in the Middleware.
+              // Comparing first is what makes the write-back converge.
+              const now = sub.getValue({ fieldId: f });
+              const next = w.values[f];
+              if (String(now === null || now === undefined ? '' : now)
+                === String(next === null || next === undefined ? '' : next)) return;
+              sub.setValue({ fieldId: f, value: next });
+              applied++;
+            }
+            catch (e) {
+              log.error({
+                title: 'RB address field not writable: ' + f,
+                details: (e && e.message) || String(e)
+              });
+            }
+          });
         });
+
+        if (!applied) {
+          log.debug({
+            title: 'RB address write-back had nothing to change',
+            details: { recordType: recordType, recordId: recordId }
+          });
+          return false;                       // no save, so no nested run
+        }
         rec.save({ ignoreMandatoryFields: true, enableSourcing: false });
-        log.debug({
-          title: 'RB address write-back',
-          details: {
-            recordType: recordType, recordId: recordId,
-            line: line, nsAddressId: addr.nsId || null, wrote: keys
-          }
-        });
         return true;
       } catch (e) {
         logIo.exception(entry, { type: recordType, id: recordId }, e);

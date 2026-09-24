@@ -340,7 +340,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       v[L.user] = runtime.getCurrentUser().id;
       if (o.requestUuid) v[L.requestUuid] = o.requestUuid;
       if (o.payload) v[L.attemptPayload] = util.clip(o.payload, 100000);
-      if (capturing(cfg, 'request')) v[L.request] = redact(o.request, cfg);
+      if (capturing(cfg, 'request')) v[L.request] = captureBody(o.request, cfg);
 
       // main-record-only roll-up
       if (target.mode === 'MAIN') {
@@ -1028,7 +1028,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       return merged;
     };
 
-    // ── capture / redaction ────────────────────────────────────────────────────
+    // ── capture ────────────────────────────────────────────────────────────────
 
     const capturing = (cfg, which) => {
       const mode = String((cfg && cfg.captureText) || (cfg && cfg.capture) || '').toUpperCase();
@@ -1039,18 +1039,19 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       return true;
     };
 
-    const PII_KEYS = /(^|_)(recipient_name|addressee|line1|line2|phone|email|zip)($|_)/i;
-
-    const redact = (body, cfg) => {
+    /**
+     * The request body as it is stored on the Sync Log. Clipped to the
+     * configured payload cap, nothing else.
+     *
+     * PII redaction was removed: it masked the very fields an address problem
+     * is diagnosed from, and whether the log may hold this data is a decision
+     * about who can see the Sync Log, not about what the SuiteApp writes into
+     * it. Capture Mode still decides WHETHER a request is stored at all.
+     */
+    const captureBody = (body, cfg) => {
       if (util.blank(body)) return '';
       const cap = Number(cfg && cfg.payloadCap) || 4000;
-      if (!cfg || !cfg.redactPii) return util.clip(
-        typeof body === 'string' ? body : util.canonical(body), cap);
-      let obj = body;
-      if (typeof body === 'string') { obj = util.safeJson(body); if (!obj) return util.clip(body, cap); }
-      const out = {};
-      Object.keys(obj).forEach((k) => { out[k] = PII_KEYS.test(k) ? '[REDACTED]' : obj[k]; });
-      return util.clip(util.canonical(out), cap);
+      return util.clip(typeof body === 'string' ? body : util.canonical(body), cap);
     };
 
     const remainingUnits = () => {
@@ -1282,11 +1283,76 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       }
     };
 
+    /**
+     * Every address of this parent that the Middleware has accepted, newest
+     * state first, keyed by the NetSuite address id.
+     *
+     * This is how a DELETED address is noticed. NetSuite gives no event for
+     * "an address book line was removed" — the line is simply not there on the
+     * next save. Comparing the lines that exist now against the ones the log
+     * says were accepted is the only way to see the difference, and the log is
+     * the only place that survives the line disappearing.
+     *
+     * Rows whose newest successful operation is Delete are left out: that
+     * address has already been removed remotely and must not be deleted twice.
+     *
+     * @returns {Array<{nsAddressId:string, uuid:string, logNsId:string}>}
+     */
+    const syncedAddresses = (parentRecordType, parentRecordId) => {
+      const out = [];
+      const seen = {};
+      if (!parentRecordType || !parentRecordId) return out;
+
+      const prefix = String(parentRecordId) + '#addr:';
+      try {
+        const filters = [
+          [L.recType, 'is', String(parentRecordType)], 'AND',
+          [L.nsId, 'startswith', prefix], 'AND',
+          [L.success, 'is', 'T']
+        ];
+        const typeId = lid(C.LIST.syncType, C.SYNCTYPE.ADDRESS);
+        if (typeId) filters.push('AND', [L.type, 'anyof', typeId]);
+
+        search.create({
+          type: C.REC.LOG, filters: filters,
+          columns: [
+            search.createColumn({ name: 'internalid', sort: search.Sort.DESC }),
+            L.nsId, L.uuid, L.operation
+          ]
+        }).run().each((r) => {
+          const key = String(r.getValue(L.nsId) || '');
+          if (!key || seen[key]) return true;          // newest row per address
+          seen[key] = true;
+
+          const op = String(r.getText(L.operation) || '');
+          if (op === C.OPERATION.DELETE) return true;  // already removed
+
+          out.push({
+            logNsId: key,
+            nsAddressId: key.slice(prefix.length),
+            uuid: String(r.getValue(L.uuid) || '')
+          });
+          return true;
+        });
+      } catch (e) {
+        log.error({
+          title: 'RB syncedAddresses ' + parentRecordType + '/' + parentRecordId,
+          details: e
+        });
+      }
+
+      log.debug({
+        title: 'RB addresses previously accepted ' + parentRecordType + '/' + parentRecordId,
+        details: { found: out.length, addresses: out }
+      });
+      return out;
+    };
+
     const logApi = {
       resolveLogTarget, openCall, closeCall, closeSuccess, closeFailure,
       openDeferred, stampTry, exception, mergeDuplicates, lastSuccess,
       findOpenMain, closeStaleWorkItem, closeNoAction, parkUnsent,
-      syncedUnitUuids, recordNoCall, closeNeedsReview
+      syncedUnitUuids, syncedAddresses, recordNoCall, closeNeedsReview
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1354,7 +1420,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       });
       const cfg = o.cfg;
 
-      // ── The gate comes first. Before the timeout, before redaction, before
+      // ── The gate comes first. Before the timeout, before capture, before
       //    https.request. One gate, inside the client, unbypassable: a new
       //    record type gets it for free and no developer can forget it.
       const gate = envGate(cfg);
@@ -1449,14 +1515,15 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           timeout: (Number(cfg.timeout) || 8) * 1000
         });
 
+        // TODO: The following is a stub for testing the call() function without making an actual HTTP request. In a real environment, the https.request code should be uncommented and used instead.
         let testApiResponse = 'success';
-
         if (testApiResponse === 'success') {
-          res = { code: 200, body: JSON.stringify({ success: true, uuid: 'TEST-UUID-00000001' }) };
+          res = { code: 200, body: JSON.stringify({ success: true, uuid: o.body?.custom_uuid || util.uuid() }) };
         } else if (testApiResponse === 'error') {
           res = { code: 500, body: JSON.stringify({ success: false }) };
         }
 
+        // TODO: Uncomment the following code when running in a real environment with the https module available
         // res = https.request({
         //   method: o.endpoint.method,
         //   url: url,
