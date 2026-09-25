@@ -1,4 +1,4 @@
-<clientscript scriptid="customscript_jj_rb_cs_forms">
+<clientscript scriptid="customscript_jj_cs_rb_forms">
   <description>RapidBridge Master Data Client Script</description>
   <isinactive>F</isinactive>
   <name>JJ RB CS Forms</name>
@@ -6,9 +6,9 @@
   <notifyemails></notifyemails>
   <notifyowner>T</notifyowner>
   <notifyuser>F</notifyuser>
-  <scriptfile>[/SuiteScripts/Jobin and Jismi IT Services/RapidBridge SuiteApp/Master Scripts/jj_rb_cs_forms.js]</scriptfile>
+  <scriptfile>[/SuiteScripts/Jobin and Jismi IT Services/RapidBridge SuiteApp/Master Scripts/jj_cs_rb_forms.js]</scriptfile>
   <scriptdeployments>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_sync_log">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_sync_log">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -21,7 +21,7 @@
       <recordtype>[scriptid=customrecord_jj_rb_sync_log]</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_config">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_config">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -34,7 +34,7 @@
       <recordtype>[scriptid=customrecord_jj_rb_config]</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_dosage">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_dosage">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -47,7 +47,7 @@
       <recordtype>[scriptid=customrecord_jj_rb_dosage_form]</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_uom">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_uom">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -60,7 +60,7 @@
       <recordtype>[scriptid=customrecord_jj_rb_uom_detail]</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_assembly">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_assembly">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -73,7 +73,7 @@
       <recordtype>ASSEMBLYITEM</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_serialized">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_serialized">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -86,7 +86,7 @@
       <recordtype>SERIALIZEDINVENTORYITEM</recordtype>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_cs_lotnumbered">
+    <scriptdeployment scriptid="customdeploy_jj_cs_rb_lotnumbered">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>

@@ -1,4 +1,4 @@
-<usereventscript scriptid="customscript_jj_rb_ue_master">
+<usereventscript scriptid="customscript_jj_ue_rb_master">
   <description>RapidBridge Master Data User Event</description>
   <isinactive>F</isinactive>
   <name>JJ RB UE Master</name>
@@ -6,9 +6,9 @@
   <notifyemails></notifyemails>
   <notifyowner>T</notifyowner>
   <notifyuser>F</notifyuser>
-  <scriptfile>[/SuiteScripts/Jobin and Jismi IT Services/RapidBridge SuiteApp/Master Scripts/jj_rb_ue_master.js]</scriptfile>
+  <scriptfile>[/SuiteScripts/Jobin and Jismi IT Services/RapidBridge SuiteApp/Master Scripts/jj_ue_rb_master.js]</scriptfile>
   <scriptdeployments>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_location">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_location">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -22,7 +22,7 @@
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_uom">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_uom">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -36,7 +36,7 @@
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_dosage">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_dosage">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -50,7 +50,7 @@
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_config">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_config">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -64,7 +64,7 @@
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_assembly">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_assembly">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -78,7 +78,7 @@
       <runasrole></runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_lotnumbered">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_lotnumbered">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -92,7 +92,7 @@
       <runasrole></runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_serialized">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_serialized">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -106,7 +106,7 @@
       <runasrole></runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_customer">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_customer">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
@@ -120,7 +120,7 @@
       <runasrole>ADMINISTRATOR</runasrole>
       <status>RELEASED</status>
     </scriptdeployment>
-    <scriptdeployment scriptid="customdeploy_jj_rb_ue_vendor">
+    <scriptdeployment scriptid="customdeploy_jj_ue_rb_vendor">
       <allemployees>T</allemployees>
       <alllocalizationcontexts>T</alllocalizationcontexts>
       <allpartners>F</allpartners>
