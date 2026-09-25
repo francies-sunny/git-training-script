@@ -1229,6 +1229,59 @@
       <storevalue>T</storevalue>
       <subtab></subtab>
     </customrecordcustomfield>
+    <customrecordcustomfield scriptid="custrecord_jj_rb_cf_pack_size_map">
+      <accesslevel>2</accesslevel>
+      <aidescription></aidescription>
+      <allowquickadd>F</allowquickadd>
+      <applyformatting>F</applyformatting>
+      <checkspelling>F</checkspelling>
+      <defaultchecked>F</defaultchecked>
+      <defaultselection></defaultselection>
+      <defaultvalue>{&quot;Each&quot;:&quot;1&quot;,&quot;Ampoule&quot;:&quot;2&quot;,&quot;Bottle&quot;:&quot;3&quot;,&quot;Box&quot;:&quot;4&quot;,&quot;Case&quot;:&quot;5&quot;,&quot;Container&quot;:&quot;6&quot;,&quot;Carton&quot;:&quot;7&quot;,&quot;Dozen&quot;:&quot;8&quot;,&quot;Gross&quot;:&quot;9&quot;,&quot;Kit&quot;:&quot;10&quot;,&quot;Ounce&quot;:&quot;11&quot;,&quot;Percent&quot;:&quot;12&quot;,&quot;Piece&quot;:&quot;13&quot;,&quot;Pallet&quot;:&quot;14&quot;,&quot;Package&quot;:&quot;15&quot;,&quot;Shelf Package&quot;:&quot;16&quot;,&quot;Syringe&quot;:&quot;17&quot;,&quot;Unit&quot;:&quot;18&quot;,&quot;Vial&quot;:&quot;19&quot;}</defaultvalue>
+      <description>JSON map of Saleable Unit to the TrackTraceRX pack size type id.</description>
+      <displayheight>6</displayheight>
+      <displaytype>NORMAL</displaytype>
+      <displaywidth></displaywidth>
+      <dynamicdefault></dynamicdefault>
+      <enabletextenhance>F</enabletextenhance>
+      <encryptatrest>F</encryptatrest>
+      <fieldtype>TEXTAREA</fieldtype>
+      <globalsearch>F</globalsearch>
+      <help>Maps each Saleable Unit on a RapidBridge UOM Detail row to the TrackTraceRX pack size type id sent as pack_size_type_id.&#xd;
+&#xd;
+FORMAT — Enter one JSON object. Keys must match the Saleable Unit (case-insensitive; spaces ignored). Values must be TrackTraceRX packaging type ids as strings.&#xd;
+&#xd;
+{&quot;Each&quot;: &quot;1&quot;, &quot;Case&quot;: &quot;5&quot;, &quot;Pallet&quot;: &quot;14&quot;}&#xd;
+&#xd;
+IDS — Use TrackTraceRX ids, not NetSuite ids. Get ids from Middleware GET /products/packaging_types. The default map contains all 19 ids; unmatched keys are ignored.&#xd;
+&#xd;
+ID 1 — Represents the base unit. Map exactly one unit to 1. Rows mapped to 1 are sent as is_leaf_product true; all others are false.&#xd;
+&#xd;
+COMPOSITION — Non-base rows use the UUID of the item&apos;s base unit product and its Quantity in Lowest Unit. The base unit syncs first; if not accepted, the pack row is held.&#xd;
+&#xd;
+UNMAPPED — Falls back to id 1 and is logged. INVALID JSON — Logged and treated as empty; all rows fall back to 1. Check the execution log.</help>
+      <isformula>F</isformula>
+      <ismandatory>T</ismandatory>
+      <isparent>F</isparent>
+      <label>Pack Size Type Map</label>
+      <linktext></linktext>
+      <maxlength></maxlength>
+      <maxvalue></maxvalue>
+      <minvalue></minvalue>
+      <onparentdelete></onparentdelete>
+      <parentsubtab></parentsubtab>
+      <rolerestrict>F</rolerestrict>
+      <searchcomparefield></searchcomparefield>
+      <searchdefault></searchdefault>
+      <searchlevel>2</searchlevel>
+      <selectrecordtype></selectrecordtype>
+      <showinlist>F</showinlist>
+      <sourcefilterby></sourcefilterby>
+      <sourcefrom></sourcefrom>
+      <sourcelist></sourcelist>
+      <storevalue>T</storevalue>
+      <subtab></subtab>
+    </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_po_enabled">
       <accesslevel>2</accesslevel>
       <aidescription></aidescription>

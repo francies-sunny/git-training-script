@@ -59,7 +59,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       let cols = dedupe((columns || []).filter(Boolean));
       const dropped = [];
 
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         if (!cols.length) break;
         try {
           const vals = search.lookupFields({ type: type, id: id, columns: cols });
@@ -303,6 +303,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           blockedTry: C.TRY.BLOCK_NO_UOM, reason: C.REASON.NO_UOM
         };
 
+      // BASE UNIT FIRST. A pack names its child product by UUID, so the row
+      // that IS that child has to be accepted before the pack can be sent. The
+      // rows keep their internal-id order within each group, so the sequence
+      // is still stable from one save to the next.
+      rows.sort((a, b) => {
+        const la = isLeafRow(a, cfg) ? 0 : 1;
+        const lb = isLeafRow(b, cfg) ? 0 : 1;
+        if (la !== lb) return la - lb;
+        return Number(a.id) - Number(b.id);
+      });
+
       // A UOM row saved directly syncs THAT row only — never its siblings (§10.3).
       const wanted = o && o.onlyUomRowId
         ? rows.filter((r) => String(r.id) === String(o.onlyUomRowId))
@@ -319,6 +330,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         storedSynced: r.synced,
         data: item,                     // the shared half
         uom: r,                        // the identity half
+        // Every active row of the same item. A pack row needs its base-unit
+        // sibling's UUID to state its composition, and a row saved on its own
+        // still has to be able to find it.
+        uomRows: rows,
         dosageCode: dosageCode
       }, unitFields(U)));
 
@@ -467,12 +482,120 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * §8.3 — Item / Product. Shared fields come from the ITEM; identity fields
      * come from the UOM ROW. That split is what makes N products from one item.
      */
+    /**
+     * The TrackTraceRX pack size type id for one UOM Detail row.
+     *
+     * The mapping lives on the configuration as JSON, keyed on the Saleable
+     * Unit display text, because neither half can be hardcoded: the ids come
+     * from GET /products/packaging_types and the units are the client's own
+     * custom list.
+     *
+     * An unmapped unit falls back to "1", as the reference build does. That is
+     * the leaf value, so the fallback is written to the execution log: a Case
+     * that quietly became a leaf product is a data error worth seeing.
+     */
+    const packSizeTypeOf = (u, cfg) => {
+      if (!u) return '1';
+      // Resolved once per row. The rows are sorted by this value and the
+      // builder reads it again, so without the cache one unmapped unit would
+      // write the audit entry below a dozen times for one save.
+      if (u.packSizeType !== undefined) return u.packSizeType;
+
+      const map = (cfg && cfg.packSizeTypes) || {};
+      const key = String(u.unit || '').trim().toUpperCase();
+      if (key && Object.prototype.hasOwnProperty.call(map, key)) {
+        u.packSizeType = map[key];
+        return u.packSizeType;
+      }
+
+      log.audit({
+        title: 'RB no pack size type mapped for unit "' + (u.unit || '') + '"',
+        details: 'Falling back to 1, which marks the product as a leaf. Add the ' +
+          'unit to the Pack Size Type Map on the RapidBridge Configuration.'
+      });
+      u.packSizeType = '1';
+      return u.packSizeType;
+    };
+
+    /**
+     * Pack size type 1 is the base unit, and only the base unit is a leaf.
+     *
+     * TrackTraceRX: a leaf product is one that inventory is handled in. A pack
+     * made up of a child product must be false, so that a pick can be taken
+     * against the child for the pack's quantity.
+     */
+    const isLeafRow = (u, cfg) => String(packSizeTypeOf(u, cfg)) === '1';
+
+    /**
+     * The composition of a pack: which child product it is made of, and how
+     * many of them.
+     *
+     * The child is the item's base-unit row — the one whose pack size type is
+     * 1 — and the quantity is this row's Quantity in Lowest Unit. A leaf row
+     * composes nothing.
+     *
+     * @returns {{json:string, waitingFor:Object|null}} `json` is the encoded
+     *   composition, empty when there is none to send. `waitingFor` names the
+     *   base row when one exists but has not been accepted by the Middleware
+     *   yet, which is the signal to hold this row back rather than publish a
+     *   pack with no contents.
+     */
+    const compositionOf = (unit, cfg) => {
+      const u = unit.uom || {};
+      if (isLeafRow(u, cfg)) return { json: '', waitingFor: null };
+
+      const siblings = unit.uomRows || [];
+      const bases = [];
+      for (let i = 0; i < siblings.length; i++) {
+        if (String(siblings[i].id) === String(u.id)) continue;
+        if (isLeafRow(siblings[i], cfg)) bases.push(siblings[i]);
+      }
+      const base = bases.length ? bases[0] : null;
+
+      if (bases.length > 1) {
+        // Two units mapped to pack size type 1 on the same item. The rows are
+        // in internal-id order, so the choice is stable, but it is a guess and
+        // only one of them can be the product this pack is composed of.
+        log.audit({
+          title: 'RB more than one base unit row on item ' + unit.itemId,
+          details: {
+            chose: base.id, units: bases.map((r) => r.unit),
+            note: 'Map exactly one Saleable Unit to pack size type 1.'
+          }
+        });
+      }
+
+      if (!base) {
+        // Nothing to compose from. Not an error: an item may legitimately be
+        // sold only by the case, and the pack still has to reach TrackTrace.
+        log.audit({
+          title: 'RB no base unit row for pack ' + unit.recordId,
+          details: 'No active UOM Detail row maps to pack size type 1, so the ' +
+            'composition is sent empty.'
+        });
+        return { json: '', waitingFor: null };
+      }
+
+      if (util.blank(base.uuid)) return { json: '', waitingFor: base };
+
+      // The reference encoding: an array holding one object whose key is the
+      // child product UUID and whose value is the quantity.
+      const entry = {};
+      entry[String(base.uuid)] = util.blank(u.qty) ? '' : String(u.qty);
+      return { json: JSON.stringify([entry]), waitingFor: null };
+    };
+
     const buildProduct = (unit, cfg, entry) => {
       const f = entry.fields;
       const d = unit.data;
       const u = unit.uom;
       const inactive = util.truthy(d.isinactive);
-      const isLeaf = Number(u.qty) === 1;
+      // Leaf-ness follows the PACK SIZE TYPE, not the quantity. TrackTraceRX
+      // defines a leaf product as one inventory is handled in; a pack made of a
+      // child product must be false so a pick can be taken against the child.
+      const packSizeType = packSizeTypeOf(u, cfg);
+      const isLeaf = isLeafRow(u, cfg);
+      const composition = compositionOf(unit, cfg);
 
       // The FULL reference product key set. One product per active UOM Detail
       // row; the identity half comes from the row, the shared half from the item.
@@ -501,9 +624,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         product_descriptions: [{
           language_code: txt(cfg.language) || 'en',
           name: txt(d.displayname) || txt(d.itemid),
-          description: txt(d.salesdescription) || txt(d.displayname) || txt(d.itemid),
+          description: txt(d.purchasedescription) || txt(d.displayname) || txt(d.itemid),
           composition: '',
-          product_long_name: txt(d.salesdescription)
+          product_long_name: txt(d.purchasedescription)
         }],
 
         // Always present, even when the row has no NDC — the reference build
@@ -512,10 +635,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         product_identifiers: [{ identifier_code: 'US_NDC', value: txt(u.ndc) }],
 
         pack_size: txt(u.packSize),
-        // NEW key. The reference build resolved this from a hardcoded map of
-        // NetSuite unit internal ids, which cannot survive a second account.
-        // Sent empty until a configurable unit mapping is agreed.
-        pack_size_type_id: '',
+        // The reference build resolved this from a hardcoded map of NetSuite
+        // unit internal ids, which cannot survive a second account. It is read
+        // from the Pack Size Type Map on the configuration instead, keyed on
+        // the Saleable Unit's display text.
+        pack_size_type_id: txt(packSizeType),
 
         update_requirements: false,
         update_packaging: false,
@@ -527,10 +651,21 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         is_leaf_product: isLeaf,
         is_override_products_packaging_type_validation: false,
         gtin14: txt(u.gtin),
-        // NEW key, carried for parity with the reference build. The packaging
-        // hierarchy is not built in this phase — the reference builder threw
-        // on an undefined identifier, so it never transmitted either.
-        composition: ''
+
+        // What this pack is made of: the UUID of the item's base-unit product
+        // and how many of them this row holds. Empty on a leaf row and on a
+        // pack whose item has no base-unit row.
+        //
+        // The gate is not decoration. TrackTraceRX: setting
+        // update_composition true with an empty composition REMOVES the whole
+        // composition from the product, so it is true only when there is
+        // something to send.
+        update_composition: !util.blank(composition.json),
+        // A JSON-ENCODED STRING, as the reference build sends it — not an
+        // object. Keep it that way: txt() collapses an array to '' rather than
+        // encoding it, so returning an array from compositionOf would empty
+        // this key silently.
+        composition: txt(composition.json)
       };
 
       // NEW keys. Bin state is only claimed when the account feature, the
@@ -863,6 +998,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             }
           });
           unit.storedUuid = prior.uuid;
+          mirrorUomRow(unit, { uuid: prior.uuid });
           if (unit.uuidField) {
             try {
               record.submitFields({
@@ -922,6 +1058,35 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           results.push({ skipped: true, noChange: true, fromLog: true });
           maybeSyncAddresses(entry, unit, cfg, correlation, trigger, null, true);
           return;
+        }
+
+        // A pack cannot be published before the product it is made of. Its
+        // composition names the base-unit product BY UUID, and sending the
+        // pack without it would create it in the Middleware with no contents
+        // and nothing to say so. The base row is synced first (the rows are
+        // ordered that way), so this only bites when the base row itself could
+        // not be accepted.
+        if (entry.key === 'ITEM') {
+          const comp = compositionOf(unit, cfg);
+          if (comp.waitingFor) {
+            logIo.openDeferred({
+              entry: entry, unit: unit, cfg: cfg,
+              reason: C.REASON.MISSING_PARENT,
+              status: C.STATUS.OPEN_PENDING,   // resolves once the base row syncs
+              outcome: C.OUTCOME.SKIPPED,
+              trigger: trigger,
+              note: 'Base unit row ' + comp.waitingFor.id + ' (' +
+                (comp.waitingFor.unit || 'base unit') + ') has no Middleware ' +
+                'UUID yet, so this pack cannot state its composition.',
+              correlation: correlation
+            });
+            logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT, null,
+              'This row is a pack of the ' + (comp.waitingFor.unit || 'base unit') +
+              ' row (' + comp.waitingFor.id + '), which has not been accepted by ' +
+              'the Middleware yet. Sync that row first.');
+            results.push({ ok: false, blocked: 'base unit not synced' });
+            return;
+          }
         }
 
         const operation = operationFor(unit, payload);
@@ -994,7 +1159,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           logIo.closeSuccess(target, res);
           results.push({ ok: true, uuid: finalUuid });
 
-          maybeSyncAddresses(entry, unit, cfg, correlation, trigger, res.uuid || unit.storedUuid, true);
+          maybeSyncAddresses(entry, unit, cfg, correlation, trigger,
+            res.uuid || unit.storedUuid, true);
 
         } else if (res.suppressed || res.dryRun) {
           // Built, stringified, logged, not sent. Nothing is coming back for
@@ -1341,6 +1507,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           type: unit.recordType, id: unit.recordId, values: values,
           options: { ignoreMandatoryFields: true }
         });
+        mirrorUomRow(unit, {
+          uuid: unit.storedUuid, payload: payloadStr, synced: true
+        });
       } catch (e) {
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
@@ -1421,6 +1590,28 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       }
     };
 
+    /**
+     * Carry a UOM row's new identity onto the row object its siblings share.
+     *
+     * Every unit of one item holds the SAME array of row objects
+     * (unit.uomRows), and a pack row reads its base sibling's UUID out of it to
+     * state its composition. Whenever a row's identity moves — accepted by the
+     * Middleware, adopted back from the Sync Log, healed from it — the shared
+     * copy has to move with it, or the pack rows evaluated later in the same
+     * execution will read a blank UUID and be held back for a base row that is
+     * perfectly synchronized.
+     */
+    const mirrorUomRow = (unit, values) => {
+      if (!unit || !unit.uomId || !Array.isArray(unit.uomRows)) return;
+      for (let i = 0; i < unit.uomRows.length; i++) {
+        if (String(unit.uomRows[i].id) !== String(unit.uomId)) continue;
+        if (!util.blank(values.uuid)) unit.uomRows[i].uuid = values.uuid;
+        if (values.payload !== undefined) unit.uomRows[i].payload = values.payload;
+        if (values.synced !== undefined) unit.uomRows[i].synced = values.synced;
+        return;
+      }
+    };
+
     const writeBackSuccess = (entry, unit, uuid, payloadStr, cfg) => {
       log.debug("Write Back Success", { details: { uuid: uuid, payloadLength: payloadStr.length } });
       const values = {};
@@ -1447,6 +1638,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         if (uuid) unit.storedUuid = uuid;
         unit.storedPayload = payloadStr;
         unit.storedSynced = true;
+
+        mirrorUomRow(unit, { uuid: uuid, payload: payloadStr, synced: true });
 
         if (entry.key === 'LOCATION' && unit.recordType === 'location' && uuid && cfg) {
           syncLocationStorageArea(entry, unit, cfg, uuid);
@@ -2824,6 +3017,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       lockSyncFields, clearAllSyncFields, cacheForDelete, handleDelete,
       validateConfig, validateUomRow, validateItem,
       ensureParentLocation, isEligible,
+      packSizeTypeOf, isLeafRow, compositionOf,
       locationAddresses, entityAddresses,
       // resolveStateId, 
     };

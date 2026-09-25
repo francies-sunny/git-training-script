@@ -37,6 +37,7 @@ define(['N/search'],
       contentType: 'custrecord_jj_rb_cf_content_type',
       timeout: 'custrecord_jj_rb_cf_timeout', language: 'custrecord_jj_rb_cf_language',
       productClass: 'custrecord_jj_rb_cf_product_class',
+      packSizeMap: 'custrecord_jj_rb_cf_pack_size_map',
       eligField: 'custrecord_jj_rb_cf_elig_field',
       maxInline: 'custrecord_jj_rb_cf_max_inline',
       useDosage: 'custrecord_jj_rb_cf_use_dosage',
@@ -678,6 +679,60 @@ define(['N/search'],
      * @returns {Object|null} null when nothing is configured — the caller returns
      *                        silently rather than guessing at a host.
      */
+    /**
+     * Parse the Pack Size Type Map configuration value.
+     *
+     * Accepts {"Each":"1","Case":"5"}, where the key is the Saleable Unit and
+     * the value is the TrackTraceRX pack size type id from
+     * GET /products/packaging_types. The inverted form {"1":"Each"} is NOT
+     * accepted — the unit has to be the key, because two units can legitimately
+     * share a pack size type.
+     *
+     * A value that will not parse is logged and treated as an empty map rather
+     * than throwing: a mistyped configuration must not stop every item syncing.
+     *
+     * @returns {Object} UPPERCASED unit text -> pack size type id, as a string
+     */
+    const parsePackSizeMap = (raw) => {
+      const out = {};
+      if (!raw) return out;
+      let src = null;
+      try { src = JSON.parse(String(raw)); }
+      catch (e) {
+        log.error({
+          title: 'RB Pack Size Type Map is not valid JSON',
+          details: (e && e.message) || String(e)
+        });
+        return out;
+      }
+      if (!src || typeof src !== 'object' || Array.isArray(src)) {
+        log.error({
+          title: 'RB Pack Size Type Map must be a JSON object',
+          details: 'Expected {"Each":"1","Case":"5"}; got ' + String(raw).slice(0, 120)
+        });
+        return out;
+      }
+      Object.keys(src).forEach((k) => {
+        const v = src[k];
+        // Scalars only. An object or an array here would stringify to
+        // "[object Object]" or "1,2" and travel to the Middleware as the pack
+        // size type id, which is worse than having no mapping at all.
+        if (v === null || v === undefined || typeof v === 'object') {
+          log.error({
+            title: 'RB Pack Size Type Map value ignored for "' + k + '"',
+            details: 'Expected a number or a string; got ' +
+              (v === null ? 'null' : typeof v) + '.'
+          });
+          return;
+        }
+        const val = String(v).trim();
+        if (val === '') return;                      // trimmed, then checked
+        out[String(k).trim().toUpperCase()] = val;
+      });
+      return out;
+    };
+
+    /** The single active configuration row, read once per execution. */
     const get = () => {
       if (CFG_READ) return CFG_CACHE;
       CFG_READ = true;
@@ -712,6 +767,15 @@ define(['N/search'],
           // (PUT_IS_ACTIVE_FALSE / DELETE) was never seen and every account
           // silently behaved as the default.
           row.inactiveMethod = String(row.inactiveMethod || row.inactiveMethodText || 'PUT_IS_ACTIVE_FALSE').toUpperCase();
+
+          // Saleable Unit -> TrackTraceRX pack size type id, as JSON on the
+          // configuration. It cannot be hardcoded: the ids come from
+          // GET /products/packaging_types and the Saleable Unit values are the
+          // client's own list. Keyed case-insensitively on the DISPLAY TEXT of
+          // the Saleable Unit, so the map survives a redeployed list whose
+          // internal ids differ.
+          row.packSizeTypes = parsePackSizeMap(row.packSizeMap);
+
           CFG_CACHE = row;
         });
       } catch (e) {
