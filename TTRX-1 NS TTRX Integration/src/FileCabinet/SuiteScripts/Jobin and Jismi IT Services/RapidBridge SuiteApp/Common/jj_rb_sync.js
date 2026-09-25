@@ -319,6 +319,28 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         ? rows.filter((r) => String(r.id) === String(o.onlyUomRowId))
         : rows;
 
+      // The row the save came from is not among its item's ACTIVE rows. An
+      // inactive row is not a product and is not published, which is correct —
+      // but returning an empty list here left the row untouched and the item
+      // stamped as failed with no message, so it is reported as a block.
+      if (o && o.onlyUomRowId && !wanted.length) {
+        log.audit({
+          title: 'RB UOM Detail row not published',
+          details: {
+            uomRowId: o.onlyUomRowId, itemId: itemId,
+            activeRows: rows.map((r) => r.id)
+          }
+        });
+        return {
+          list: [],
+          blocked: 'This UOM Detail row is not an active row of item ' + itemId +
+            ', so it is not one of its products and nothing is published for it.',
+          blockedTry: C.TRY.SKIP_INELIGIBLE,
+          reason: C.REASON.NOT_ELIGIBLE,
+          stampUomRowId: o.onlyUomRowId
+        };
+      }
+
       const list = wanted.map((r) => Object.assign({
         recordType: C.REC.UOM,          // the unit IS the UOM row
         recordId: r.id,
@@ -767,7 +789,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       });
 
       // A UOM row is not its own object — it is one unit of its parent item.
-      if (entry.key === 'UOM') return runUomRow(recordId, cfg, trigger, correlation);
+      if (entry.key === 'UOM') return runUomRow(recordId, cfg, trigger, correlation, o.newRecord);
 
       if (entry.implemented === false || !builders[entry.builder]) {
         const msg = 'No builder for "' + entry.builder + '". ' + entry.key +
@@ -783,6 +805,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (entry.requiresEligibility && !isEligible(entry, recordId, recordType, cfg)) {
         logIo.stampTry(itemStampUnit(entry, recordId, recordType),
           C.TRY.SKIP_INELIGIBLE, null, '');
+        // The save may have come from a UOM Detail row. Its item is what was
+        // judged ineligible, so say so ON THE ROW as well — otherwise the row
+        // the user just saved shows nothing at all.
+        if (o.onlyUomRowId)
+          logIo.stampTry(uomStampUnit(o.onlyUomRowId), C.TRY.SKIP_INELIGIBLE, null,
+            'The parent item is not marked eligible for RapidBridge, so none of ' +
+            'its UOM Detail rows is published.');
         return [{ skipped: true, reason: 'not eligible' }];
       }
 
@@ -791,8 +820,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (units.blocked) {
         // A blocked item still gets a work item, so it lands on the
         // reconciliation page instead of vanishing.
-        const stampUnit = entry.key === 'ITEM'
-          ? itemStampUnit(entry, recordId, recordType) : null;
+        const stampUnit = units.stampUomRowId
+          ? uomStampUnit(units.stampUomRowId)
+          : (entry.key === 'ITEM'
+            ? itemStampUnit(entry, recordId, recordType) : null);
         if (units.blockedTry && stampUnit) {
           logIo.openDeferred({
             entry: entry, unit: stampUnit, cfg: cfg,
@@ -1203,7 +1234,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         }
       });
 
-      if (entry.key === 'ITEM') rollUpItem(entry, recordId, recordType, results);  // step 8
+      if (entry.key === 'ITEM')
+        rollUpItem(entry, recordId, recordType, results, !!o.onlyUomRowId);  // step 8
 
       log.debug({
         title: 'RB sync.run done ' + recordType + '/' + recordId,
@@ -1225,15 +1257,22 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * delegates to its parent item, and syncs THAT ROW ONLY. Touching siblings
      * would turn one edit into N calls.
      */
-    const runUomRow = (uomRowId, cfg, trigger, correlation) => {
+    const runUomRow = (uomRowId, cfg, trigger, correlation, newRecord) => {
       const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
       let itemId = null;
       try {
         const v = search.lookupFields({ type: C.REC.UOM, id: uomRowId, columns: [U.item] });
         itemId = textOf(v[U.item]);
       } catch (e) {
-        log.debug("Error @ runUomRow: ", e);
-        /* fall through */
+        log.debug("Error @ runUomRow lookupFields: ", e);
+        /* fall through to the record itself */
+      }
+
+      // The row that was just saved is in hand. Read the item off it rather
+      // than deciding there is no parent because one search would not answer.
+      if (!itemId && newRecord) {
+        try { itemId = textOf(newRecord.getValue({ fieldId: U.item })); }
+        catch (e) { log.debug("Error @ runUomRow newRecord read: ", e); }
       }
 
       if (!itemId) {
@@ -1244,7 +1283,28 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       }
 
       const itemType = itemTypeOf(itemId);
-      if (!itemType) return [{ ok: false, blocked: 'parent item type unresolved' }];
+      if (!itemType) {
+        // Silence here is what made a UOM Detail save look like it did nothing:
+        // no call, no Sync Log row, no stamp on the record, nothing in the
+        // execution log. It is a condition a person has to look at.
+        const msg = 'The parent item (' + itemId + ') of this UOM Detail row is ' +
+          'not one of the item types this SuiteApp synchronizes, or its type ' +
+          'could not be read. No product can be published for the row.';
+        logIo.exception(C.MASTER.customrecord_jj_rb_uom_detail,
+          { type: C.REC.UOM, id: uomRowId }, new Error(msg));
+        try {
+          logIo.stampTry({
+            recordType: C.REC.UOM, recordId: uomRowId, uomId: uomRowId,
+            lastTryField: U.lastTry, tryResultField: U.tryResult, errorField: U.error
+          }, C.TRY.FAIL_PRE_API, null, msg);
+        } catch (e) { /* the exception above is the record that matters */ }
+        return [{ ok: false, blocked: 'parent item type unresolved' }];
+      }
+
+      log.debug({
+        title: 'RB UOM Detail row delegating to its item',
+        details: { uomRowId: uomRowId, itemId: itemId, itemType: itemType }
+      });
 
       return run({
         entry: C.MASTER[itemType], recordId: itemId, recordType: itemType,
@@ -1255,22 +1315,66 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /**
      * Which of the five item record types is this? The dispatch entry needs it.
-     * One search on the generic `item` type, reading `recordtype` — not five
-     * speculative lookupFields calls against types it probably is not.
+     *
+     * Three ways of asking, cheapest first, because an account that will not
+     * answer the first two must not take the whole UOM Detail sync down with
+     * it — that failure was silent, and a row saved on its own looked as though
+     * nothing had happened at all.
      */
     const itemTypeOf = (itemId) => {
-      let t = null;
+      const known = (t) => {
+        const k = String(t || '').toLowerCase();
+        return (k && C.MASTER[k] && C.MASTER[k].key === 'ITEM') ? k : null;
+      };
+
+      // 1. The direct read. `recordtype` is a field on the generic item type,
+      //    and this is the cheapest way to ask which of the five it is.
       try {
+        const v = search.lookupFields({
+          type: 'item', id: itemId, columns: ['recordtype']
+        });
+        const hit = known(textOf(v.recordtype));
+        if (hit) return hit;
+        log.debug({
+          title: 'RB itemTypeOf lookupFields',
+          details: { itemId: itemId, recordtype: textOf(v.recordtype) || null }
+        });
+      } catch (e) {
+        log.debug({ title: 'RB itemTypeOf lookupFields failed', details: (e && e.message) || String(e) });
+      }
+
+      // 2. The same question as a search. Some accounts refuse `recordtype` as
+      //    a search COLUMN on item even though the field reads fine above, and
+      //    that refusal used to take the whole UOM Detail sync down with it.
+      try {
+        let t = null;
         search.create({
           type: 'item',
           filters: [['internalid', 'anyof', itemId]],
           columns: ['recordtype']
-        }).run().each((r) => {
-          t = String(r.getValue('recordtype') || '').toLowerCase();
-          return false;
-        });
-      } catch (e) { return null; }
-      return (t && C.MASTER[t]) ? t : null;
+        }).run().each((r) => { t = r.getValue('recordtype'); return false; });
+        const hit = known(t);
+        if (hit) return hit;
+      } catch (e) {
+        log.debug({ title: 'RB itemTypeOf search failed', details: (e && e.message) || String(e) });
+      }
+
+      // 3. Ask each item type in turn. Five cheap lookups, and only ever
+      //    reached when the two calls above could not answer — but it means a
+      //    UOM Detail row still synchronizes instead of failing silently.
+      const types = Object.keys(C.MASTER).filter((k) => C.MASTER[k].key === 'ITEM');
+      for (let i = 0; i < types.length; i++) {
+        try {
+          search.lookupFields({ type: types[i], id: itemId, columns: ['itemid'] });
+          log.audit({
+            title: 'RB item type resolved by probe',
+            details: { itemId: itemId, type: types[i] }
+          });
+          return types[i];
+        } catch (e) { /* not this type */ }
+      }
+
+      return null;
     };
 
     /** §8.1 — only regulated items sync. Read from the CONFIGURED field id. */
@@ -1281,7 +1385,22 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         const v = search.lookupFields({ type: recordType, id: recordId, columns: [fieldId] });
         raw = labelOf(v[fieldId]) || textOf(v[fieldId]);
-      } catch (e) { return false; }
+      } catch (e) {
+        // NOT the same as the field saying no. The configured Eligibility Field
+        // is free text, so a typo, a field the account never deployed, or one
+        // that is not valid on this item type all land here — and used to make
+        // every item silently ineligible with nothing written anywhere.
+        log.error({
+          title: 'RB eligibility field could not be read: ' + fieldId,
+          details: {
+            recordType: recordType, recordId: recordId,
+            error: (e && e.message) || String(e),
+            note: 'Treated as not eligible. Check the Eligibility Field setting ' +
+              'on the RapidBridge Configuration.'
+          }
+        });
+        return false;
+      }
 
       const s = String(raw).toUpperCase();
       if (s === 'TRUE' || s === 'T' || s === 'YES') return true;
@@ -1291,6 +1410,21 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     };
 
     /** A stamp-only unit for the ITEM record itself (it has no uuid of its own). */
+    /**
+     * A stamp target for the UOM Detail ROW rather than its item.
+     *
+     * A row saved on its own delegates to its parent item, and every gate from
+     * that point on names the item. Stamping only the item leaves the row the
+     * user is looking at completely untouched, which reads as "the save did
+     * nothing" — so any gate that can end a single-row run stamps the row too.
+     */
+    const uomStampUnit = (uomRowId) => {
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      return Object.assign({
+        recordType: C.REC.UOM, recordId: uomRowId, uomId: uomRowId, data: {}
+      }, unitFields(U));
+    };
+
     const itemStampUnit = (entry, itemId, itemType) => Object.assign({
       recordType: itemType, recordId: itemId, uomId: null,
       storedUuid: null, storedPayload: null, storedSynced: false, data: {}
@@ -1680,20 +1814,58 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
      * §8.6 — the item summarises its UOM rows. It has no stored payload of its
      * own: the payloads live on the rows, because each row is a distinct object.
      */
-    const rollUpItem = (entry, itemId, itemType, results) => {
+    const rollUpItem = (entry, itemId, itemType, results, partial) => {
       const f = entry.fields;
       const failed = results.filter((r) => r.ok === false).length;
       const deferred = results.filter((r) => r.deferred).length;
+      const sent = results.filter((r) => r.ok === true).length;
       const allOk = failed === 0 && deferred === 0 && results.length > 0;
+
+      // NOTHING WAS EVALUATED. Not a failure — there is no outcome to report,
+      // and stamping one said "Failed - API error" with an empty Last Error on
+      // a save where no call was even attempted.
+      if (!results.length) {
+        log.audit({
+          title: 'RB item roll-up skipped ' + itemType + '/' + itemId,
+          details: 'No UOM Detail row was evaluated on this save.'
+        });
+        return;
+      }
+
+      // ONE ROW OF MANY. A UOM Detail row saved on its own says nothing about
+      // its siblings, so it must not restate the whole item as synced or wipe
+      // an error another row raised. A failure still has to be visible, so it
+      // raises the flag and leaves the rest alone.
+      if (partial) {
+        const pv = {};
+        if (f.lastTry) pv[f.lastTry] = new Date();
+        if (!allOk) {
+          if (f.attention) pv[f.attention] = true;
+          if (f.error) pv[f.error] = summarise(results);
+          if (f.tryResult) pv[f.tryResult] = lists.id(C.LIST.tryResult,
+            deferred ? C.TRY.DEFERRED : C.TRY.FAIL_API);
+        }
+        try {
+          record.submitFields({
+            type: itemType, id: itemId, values: pv,
+            options: { ignoreMandatoryFields: true }
+          });
+        } catch (e) {
+          logIo.exception(entry, { type: itemType, id: itemId }, e);
+        }
+        return;
+      }
 
       const values = {};
       if (f.synced) values[f.synced] = allOk;
       if (f.attention) values[f.attention] = !allOk;
       if (f.error) values[f.error] = allOk ? '' : summarise(results);
-      if (allOk && f.lastSync) values[f.lastSync] = new Date();
+      // Only a row that actually reached the Middleware moves the item's Last
+      // Sync. A run in which every row compared equal synchronized nothing.
+      if (allOk && sent && f.lastSync) values[f.lastSync] = new Date();
       if (f.lastTry) values[f.lastTry] = new Date();
       if (f.tryResult) values[f.tryResult] = lists.id(C.LIST.tryResult,
-        allOk ? C.TRY.SYNCED
+        allOk ? (sent ? C.TRY.SYNCED : C.TRY.NO_CHANGE)
           : (deferred ? C.TRY.DEFERRED : C.TRY.FAIL_API));
 
       try {
@@ -1708,6 +1880,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     const summarise = (results) => {
       const bad = results.filter((r) => r.ok === false);
+      if (!results.length) return '';
       const def = results.filter((r) => r.deferred).length;
       const parts = [];
       if (bad.length) parts.push(bad.length + ' of ' + results.length +

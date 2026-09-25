@@ -94,7 +94,17 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
     // ── afterSubmit ────────────────────────────────────────────────────────────
     const afterSubmit = (ctx) => {
       const entry = entryFor(ctx.newRecord.type);
-      if (!entry || entry.key === 'CONFIG') return;   // Config never syncs
+      if (!entry) {
+        // Deployed to a record type the dispatch table does not know. Silence
+        // here looks exactly like a script that did not run at all.
+        log.audit({
+          title: 'RB no dispatch entry for ' + ctx.newRecord.type,
+          details: 'The User Event is deployed to this record type but the ' +
+            'dispatch table has no entry for it, so nothing can be synced.'
+        });
+        return;
+      }
+      if (entry.key === 'CONFIG') return;             // Config never syncs
 
       try {
         log.debug('Master UE - afterSubmit', { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id, eventType: ctx.type, entry: entry.key });
@@ -121,12 +131,27 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
 
         // ── P4. GUARD 1 — free. Our own write-back changes only sync-control
         //    fields, and this is what stops it re-triggering the sync.
-        if (util.onlySyncFieldsChanged(ctx.oldRecord, ctx.newRecord, C.SYNC_CONTROL_FIELDS)) return;
+        if (util.onlySyncFieldsChanged(ctx.oldRecord, ctx.newRecord, C.SYNC_CONTROL_FIELDS)) {
+          log.debug({
+            title: 'RB skipped: only sync-control fields changed',
+            details: { recordType: ctx.newRecord.type, recordId: ctx.newRecord.id }
+          });
+          return;
+        }
 
         log.debug("After onlySyncFieldsChanged");
 
-        // ── P5. No configuration ⇒ return silently rather than guess a host.
-        if (!cfg) return;
+        // ── P5. No configuration ⇒ do not guess a host. Say so: without this
+        //    line, every record type on the account goes quiet with nothing in
+        //    the log to explain it.
+        if (!cfg) {
+          log.audit({
+            title: 'RB no active configuration row',
+            details: 'Exactly one RapidBridge Configuration row must have ' +
+              'Active ticked and not be inactive. Nothing is synced until it does.'
+          });
+          return;
+        }
 
         // ── P6. Feature gate. Dosage Form needs use_dosage; Bin needs use_bins.
         if (entry.featureFlag && cfg[flagKey(entry.featureFlag)] !== true) {
