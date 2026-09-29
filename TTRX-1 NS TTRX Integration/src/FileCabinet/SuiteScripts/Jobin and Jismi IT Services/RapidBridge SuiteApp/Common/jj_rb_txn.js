@@ -46,6 +46,26 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
     const entryFor = (t) => C.TXNMAP[String(t || '').toLowerCase()] || null;
 
+    /**
+     * How every RapidBridge message names a record: the NAME first, the
+     * internal id in brackets after it.
+     *
+     *     Amoxicillin 500mg Tablet (715)
+     *     Main Warehouse (5)
+     *     715                        ← when the name could not be read
+     *
+     * An id on its own is not something a warehouse manager or a support
+     * person can act on: it sends them to a saved search before they can even
+     * tell which record the message is about.
+     */
+    const named = (name, id) => {
+      const n = String(name === null || name === undefined ? '' : name).trim();
+      const i = String(id === null || id === undefined ? '' : id).trim();
+      if (!n) return i || '(unknown)';
+      if (!i) return n;
+      return n + ' (' + i + ')';
+    };
+
     /** Eligibility, read from a value that may be a list text or a checkbox. */
     const eligibleValue = (raw) => {
       const s = String(raw || '').toUpperCase();
@@ -91,24 +111,10 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       catch (e) { return out; }
       if (count <= 0) return out;
 
-      // THE SOURCED COLUMN. `custcol_jj_rb_item_eligible` is wired in the
-      // object to Source List = Item, Source From = TrackTrace Eligibility, so
-      // NetSuite has already put the item's own answer on the line and no
-      // search is needed to find it.
-      //
-      // It is trusted only while the configured Eligibility Field is still the
-      // shipped one: sourcing is fixed in the field definition and cannot
-      // follow a client who points eligibility at their own item field. When
-      // it can't be trusted — or when a line predates the column, as on an
-      // order imported before it was deployed — the search below answers for
-      // exactly the items the column could not.
-      const trustSourced = String(eligField) === C.SOURCED_ELIG_FIELD;
-
-      // Pass 1 — the item on each line, and what the sourced column says.
+      // Pass 1 — the distinct items on the order.
       const items = [];
       const seen = {};
       const lineItem = [];
-      const eligible = {};
       for (let i = 0; i < count; i++) {
         let id = '';
         try {
@@ -116,44 +122,43 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         } catch (e) { id = ''; }
         id = String(id || '');
         lineItem.push(id);
-        if (!id) continue;
-        if (!seen[id]) { seen[id] = true; items.push(id); }
-        if (!trustSourced || eligible[id] !== undefined) continue;
-        const sourced = lineSourcedEligibility(newRecord, i, L);
-        if (sourced) eligible[id] = eligibleValue(sourced);
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+        items.push(id);
       }
       if (!items.length) return out;
 
-      // Pass 2 — ONE search, and only for the items the column left unanswered.
-      const unknown = items.filter((id) => eligible[id] === undefined);
-      if (unknown.length) {
-        try {
-          search.create({
-            type: 'item',
-            filters: [['internalid', 'anyof', unknown]],
-            columns: [eligField]
-          }).run().each((r) => {
-            eligible[String(r.id)] =
-              eligibleValue(r.getText(eligField) || r.getValue(eligField));
-            return true;
-          });
-        } catch (e) {
-          // The Eligibility Field is configurable free text, so a typo or a
-          // field the account never deployed lands here. Treated as "not
-          // classified" rather than "not eligible": saying nothing is better
-          // than marking a regulated order as containing no regulated lines.
-          log.error({
-            title: 'RB txn eligibility field could not be read: ' + eligField,
-            details: {
-              recordType: newRecord.type, recordId: newRecord.id || null,
-              error: (e && e.message) || String(e),
-              unresolved: unknown.length,
-              note: 'Check the Eligibility Field setting on the RapidBridge ' +
-                'Configuration. Those items were not classified on this save.'
-            }
-          });
-          if (Object.keys(eligible).length === 0) return out;
-        }
+      // Pass 2 — ONE search for the eligibility of all of them, read from the
+      // CONFIGURED field so a client who uses their own item field is answered
+      // correctly. (A sourced line column was tried and removed: it is wired to
+      // the shipped item field in the object and cannot follow that setting —
+      // see the note on C.LINE.)
+      const eligible = {};
+      try {
+        search.create({
+          type: 'item',
+          filters: [['internalid', 'anyof', items]],
+          columns: [eligField]
+        }).run().each((r) => {
+          eligible[String(r.id)] =
+            eligibleValue(r.getText(eligField) || r.getValue(eligField));
+          return true;
+        });
+      } catch (e) {
+        // The Eligibility Field is configurable free text, so a typo or a
+        // field the account never deployed lands here. Treated as "not
+        // classified" rather than "not eligible": saying nothing is better
+        // than marking a regulated order as containing no regulated lines.
+        log.error({
+          title: 'RB txn eligibility field could not be read: ' + eligField,
+          details: {
+            recordType: newRecord.type, recordId: newRecord.id || null,
+            error: (e && e.message) || String(e),
+            note: 'Check the Eligibility Field setting on the RapidBridge ' +
+              'Configuration. No line was classified on this save.'
+          }
+        });
+        return out;
       }
 
       // Pass 3 — the destination product for every unit these items sell in.
@@ -199,25 +204,6 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           sublistId: 'item', fieldId: fieldId, line: line, value: value
         });
       } catch (e) { /* the column is not on this form */ }
-    };
-
-    /**
-     * What the sourced column says about this line's item.
-     *
-     * The TEXT, because that is the list label the eligibility test reads, and
-     * because the internal id of a list value is a deployment detail. Blank
-     * when the column is not on the form, not deployed, or the line predates
-     * it — every one of which falls back to the search.
-     */
-    const lineSourcedEligibility = (rec, line, L) => {
-      if (!L || !L.itemEligible) return '';
-      try {
-        const t = rec.getSublistText({
-          sublistId: 'item', fieldId: L.itemEligible, line: line
-        });
-        if (t) return t;
-      } catch (e) { /* not on this form */ }
-      return '';
     };
 
     const lineQty = (rec, line) => {
@@ -426,15 +412,19 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
      * form, the camelCase form and the display text alike, so it does not
      * matter which shape comes back.
      */
+    const STATUS_CACHE = {};
+
     const statusOf = (rec, fromDatabase) => {
       if (!rec) return '';
       if (fromDatabase && rec.id) {
+        const key = rec.type + '|' + rec.id;
+        if (STATUS_CACHE[key] !== undefined) return STATUS_CACHE[key];
         try {
           const v = search.lookupFields({
             type: rec.type, id: rec.id, columns: ['status']
           });
           const raw = textOf(v.status) || labelOf(v.status);
-          if (raw) return raw;
+          if (raw) { STATUS_CACHE[key] = raw; return raw; }
         } catch (e) { /* fall through to the in-memory value */ }
       }
       try {
@@ -539,15 +529,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
      * because a closed line has nothing left to ship or receive and must not
      * appear in the destination's line set.
      */
-    const readLines = (entry, recordType, recordId, cfg) => {
+    const readLines = (entry, recordType, recordId) => {
       const L = entry.lineFields || C.LINE;
-      // The classification stamped in beforeSubmit is the answer. The SOURCED
-      // column is the backstop for a line that never got one — a CSV import
-      // whose sublist write did not stick, or an order that predates the
-      // column — and it is trusted on the same condition as everywhere else:
-      // only while the configured Eligibility Field is still the shipped one.
-      const trustSourced =
-        String((cfg && cfg.eligField) || C.SOURCED_ELIG_FIELD) === C.SOURCED_ELIG_FIELD;
       const rows = [];
       try {
         search.create({
@@ -561,7 +544,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           ],
           columns: [
             'line', 'item', 'quantity', 'unit', 'closed', 'location',
-            L.serialized, L.itemEligible
+            L.serialized
           ]
         }).run().each((r) => {
           const itemId = textOf(r.getValue('item'));
@@ -569,12 +552,14 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           rows.push({
             line: textOf(r.getValue('line')),
             itemId: itemId,
+            // The NAME, so an error can say which item it means. An internal
+            // id alone sends somebody to a search before they can even start.
+            itemName: r.getText('item') || '',
             quantity: Number(r.getValue('quantity')) || 0,
             unit: r.getText('unit') || textOf(r.getValue('unit')),
             closed: util.truthy(r.getValue('closed')),
             location: textOf(r.getValue('location')),
             serialized: util.truthy(r.getValue(L.serialized))
-              || (trustSourced && eligibleValue(r.getText(L.itemEligible)))
           });
           return true;
         });
@@ -638,7 +623,10 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         .filter((m) => m.reason === 'NO_UUID')
         .map((m) => m.itemId));
 
-      if (unsynced.length && o && presyncItems(unsynced, o)) {
+      const itemNames = {};
+      lines.forEach((l) => { if (l.itemName) itemNames[l.itemId] = l.itemName; });
+
+      if (unsynced.length && o && presyncItems(unsynced, o, itemNames)) {
         map = productMap(items);
         missing = applyProducts(lines, map);
       }
@@ -661,8 +649,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         l.productUuid = hit.uuid;
         if (!hit.uuid) {
           missing.push({
-            line: l.line, itemId: l.itemId, unit: l.unit,
-            reason: hit.reason, available: hit.available
+            line: l.line, itemId: l.itemId, itemName: l.itemName || '',
+            unit: l.unit, reason: hit.reason, available: hit.available
           });
         }
       });
@@ -683,7 +671,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
      *
      * @returns {boolean} true when at least one item was actually pushed
      */
-    const presyncItems = (itemIds, o) => {
+    const presyncItems = (itemIds, o, names) => {
+      const nameOf = (id) => named((names || {})[id], id);
       const todo = itemIds.filter((id) => !PRESYNCED[id]);
       if (!todo.length) return false;
       todo.forEach((id) => { PRESYNCED[id] = true; });
@@ -709,14 +698,14 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         const entry = t ? C.MASTER[t] : null;
         if (!entry || entry.key !== 'ITEM') {
           log.audit({
-            title: 'RB txn cannot pre-sync item ' + id,
+            title: 'RB txn cannot pre-sync item ' + nameOf(id),
             details: 'Its record type (' + (t || 'unknown') + ') is not one the ' +
               'master dispatch table publishes.'
           });
           return;
         }
         log.audit({
-          title: 'RB txn pre-syncing item ' + t + '/' + id,
+          title: 'RB txn pre-syncing item ' + nameOf(id) + ' [' + t + ']',
           details: 'An order line names it and it has no Middleware product ' +
             'identifier yet.'
         });
@@ -727,7 +716,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           });
           pushed = true;
         } catch (e) {
-          log.error('Error @ txn pre-sync item ' + t + '/' + id, e);
+          log.error('Error @ txn pre-sync item ' + nameOf(id) + ' [' + t + ']', e);
         }
       });
       return pushed;
@@ -1014,8 +1003,18 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       }
       const unit = txnUnit(entry, recordType, recordId, header);
 
+      // A recovery pass (§12.5) has already cleared the identity on the
+      // record. Say so here rather than trusting the re-read to have seen the
+      // write: submitFields commits, but depending on a write-then-read round
+      // trip inside one execution is a race waiting to be found in production.
+      if (o.clearedIdentity) {
+        unit.storedUuid = '';
+        unit.storedPayload = '';
+        unit.storedSynced = false;
+      }
+
       // ── step 1: Concept 3. Filter the lines.
-      const allLines = readLines(entry, recordType, recordId, cfg);
+      const allLines = readLines(entry, recordType, recordId);
       const lines = filterLines(allLines);
 
       log.debug({
@@ -1024,9 +1023,29 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       });
 
       if (!lines.length) {
-        // No call, and NO log record. §8.8, §16.2: most orders in a mixed
-        // catalogue carry no regulated product at all, and a log row for every
-        // one of them would bury the rows that matter.
+        // ── §12.4 — LINE-LEVEL CLOSE. An order that HAS a transaction and has
+        //    just lost its last trackable line is not an order with nothing to
+        //    send; it is an order with nothing LEFT. The destination still
+        //    holds the lines it was given, and an update would replace them
+        //    with an empty set, which is a worse lie than doing nothing. Apply
+        //    the close action to the whole transaction instead.
+        if (!util.blank(unit.storedUuid)) {
+          log.audit({
+            title: 'RB txn last trackable line closed ' + recordType + '/' + recordId,
+            details: 'The order holds transaction ' + unit.storedUuid + ' and no ' +
+              'line is in scope any more, so the configured Close Action is applied.'
+          });
+          return runClose({
+            entry: entry, cfg: cfg, recordType: recordType, recordId: recordId,
+            header: header, unit: unit,
+            operation: C.OPERATION.CLOSE,
+            trigger: trigger, correlation: correlation
+          });
+        }
+
+        // Never sent, and nothing to send. No call, and NO log record: most
+        // orders in a mixed catalogue carry no regulated product at all, and a
+        // log row for every one of them would bury the rows that matter.
         logIo.closeStaleWorkItem(unit,
           'Closed without a call: no line on this order is a trackable, ' +
           'serialized item, so there is nothing to send.');
@@ -1069,8 +1088,14 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
       if (!locationUuid || !partnerUuid) {
         const what = [];
-        if (!locationUuid) what.push('the location (' + (locationId || 'not set') + ')');
-        if (!partnerUuid) what.push('the ' + entityType + ' (' + (entityId || 'not set') + ')');
+        if (!locationUuid) {
+          what.push('the location ' + (locationId
+            ? named(labelOf(header.location), locationId) : '(not set on this order)'));
+        }
+        if (!partnerUuid) {
+          what.push('the ' + entityType + ' ' + (entityId
+            ? named(labelOf(header.entity), entityId) : '(not set on this order)'));
+        }
         const note = 'This order cannot be sent until ' + what.join(' and ') +
           ' has a Middleware UUID. The dependency was pre-synced and still has ' +
           'none, so it has to be looked at.';
@@ -1110,6 +1135,16 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       const payloadStr = util.canonicalCompare(payload);
       const sendBody = util.stripCompare(payload);
 
+      // ── §8.8 — LOCATION AND TRADING PARTNER ARE IMMUTABLE AFTER CREATE.
+      //    The update call drops them, so a change to either is silently NOT
+      //    applied remotely. The update still goes (the rest of the change is
+      //    legitimate), but somebody is told, because the two systems now
+      //    disagree about something nothing else in this phase will notice.
+      immutableDrift(entry, unit, cfg, payload, correlation, trigger, {
+        location: named(labelOf(header.location), textOf(header.location)),
+        partner: named(labelOf(header.entity), textOf(header.entity))
+      });
+
       if (!o.forceSend
         && util.samePayload(payloadStr, unit.storedPayload)
         && unit.storedSynced === true && unit.storedUuid) {
@@ -1128,7 +1163,14 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       // ── step 5b: the Sync Log's memory, for a record that has lost its own.
       //    Without this an order whose identifier was cleared by hand resolves
       //    to CREATE and the destination reports a duplicate custom id.
-      const prior = logIo.lastSuccess(unit, entry);
+      //    NOT ON A RECOVERY PASS. When §12.5 clears the identity it is
+      //    because the destination object is GONE — and the Sync Log's memory
+      //    of it is the memory of that same dead object, usually written by
+      //    the very void that removed it. Adopting it here put the dead
+      //    identifier straight back, sent a second update to it, and took a
+      //    second 404 that the once-only guard would not recover from. The
+      //    order then sat failed with an identifier pointing at nothing.
+      const prior = o.clearedIdentity ? null : logIo.lastSuccess(unit, entry);
       if (prior && prior.uuid && !unit.storedUuid) {
         log.audit({
           title: 'RB txn adopted UUID from Sync Log',
@@ -1220,9 +1262,104 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         return [{ ok: false, skipped: true }];
       }
 
+      // ── §12.5 — RE-OPENED AFTER A DELETE. The stored identifier points at a
+      //    transaction that no longer exists, so every update from here on
+      //    would take a 404 for ever. Clear the identity, record WHY, and let
+      //    the order be created afresh. Once only: a second 404 on the create
+      //    is a real problem and must not loop.
+      // 404 and 410 both mean "that object is not there any more". Nothing
+      // else does: a 500 is a retryable fault and a 400 is a bad payload, and
+      // re-creating on either would make a duplicate out of a transient error.
+      const gone = res.httpStatus === 404 || res.httpStatus === 410;
+      if (gone && operation === C.OPERATION.UPDATE && !o.recovered) {
+        const lost = unit.storedUuid;
+        log.audit({
+          title: 'RB txn recovering a lost transaction identifier',
+          details: {
+            recordType: recordType, recordId: recordId, uuid: lost,
+            note: 'The destination returned 404 for an update, so that ' +
+              'transaction has been voided or removed. Creating it again.'
+          }
+        });
+        logIo.openDeferred({
+          entry: entry, unit: unit, cfg: cfg,
+          reason: C.REASON.RECOVER_UUID,
+          status: C.STATUS.OPEN_PENDING, outcome: C.OUTCOME.SKIPPED,
+          trigger: trigger,
+          note: 'The transaction identifier ' + lost + ' no longer resolves in ' +
+            'TrackTraceRX, so it was cleared and this order is being sent ' +
+            'again as a new transaction. The old identifier is recorded here ' +
+            'so the change of identity is not silent.',
+          correlation: correlation
+        });
+        clearRemoteIdentity(unit);
+        return run(Object.assign({}, o, {
+          recovered: true, forceSend: true, clearedIdentity: true
+        }));
+      }
+
       sync.writeBackFailure(entry, unit, res.errorMessage);
       logIo.closeFailure(target, res, cfg);
       return [{ ok: false, error: res.errorMessage }];
+    };
+
+    /**
+     * §8.8 — the order changed something the destination will not accept.
+     *
+     * Location and trading partner are immutable once a transaction exists, and
+     * the update call drops them rather than refusing, so the change lands
+     * nowhere and nothing complains. This is the only thing that notices.
+     */
+    const immutableDrift = (entry, unit, cfg, payload, correlation, trigger, labels) => {
+      if (util.blank(unit.storedUuid) || util.blank(unit.storedPayload)) return;
+      const prev = util.safeJson(unit.storedPayload);
+      if (!prev) return;
+
+      const drifted = [];
+      if (prev.location_uuid && prev.location_uuid !== payload.location_uuid)
+        drifted.push('the location, now ' + labels.location);
+      if (prev.trading_partner_uuid
+        && prev.trading_partner_uuid !== payload.trading_partner_uuid)
+        drifted.push('the trading partner, now ' + labels.partner);
+      if (!drifted.length) return;
+
+      const note = 'This order changed ' + drifted.join(' and ') + ' after it ' +
+        'was sent. The update call DROPS both, because the destination treats ' +
+        'them as immutable once a transaction exists — so the change will NOT ' +
+        'reach TrackTraceRX and the two systems now disagree. Void the ' +
+        'destination transaction and let it be created again, or put the order ' +
+        'back the way it was.';
+
+      log.audit({
+        title: 'RB txn immutable field changed after create',
+        details: {
+          recordType: unit.recordType, recordId: unit.recordId,
+          uuid: unit.storedUuid, drifted: drifted
+        }
+      });
+      logIo.openDeferred({
+        entry: entry, unit: unit, cfg: cfg,
+        reason: C.REASON.AWAITING_DECISION,
+        status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+        trigger: trigger, note: note, correlation: correlation
+      });
+    };
+
+    /** Forget what the destination held. The record stays; its identity goes. */
+    const clearRemoteIdentity = (unit) => {
+      const values = {};
+      if (unit.uuidField) values[unit.uuidField] = '';
+      if (unit.payloadField) values[unit.payloadField] = '';
+      if (unit.syncedField) values[unit.syncedField] = false;
+      try {
+        record.submitFields({
+          type: unit.recordType, id: unit.recordId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) { log.error('Error @ txn clearRemoteIdentity', e); }
+      unit.storedUuid = '';
+      unit.storedPayload = '';
+      unit.storedSynced = false;
     };
 
     /**
@@ -1237,7 +1374,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       const noRow = missing.filter((m) => m.reason === 'NO_ROW');
       if (noRow.length) {
         parts.push('No UOM Detail row matches the unit on these lines: ' +
-          noRow.map((m) => 'line ' + m.line + ', item ' + m.itemId +
+          noRow.map((m) => 'line ' + m.line + ', item ' +
+            named(m.itemName, m.itemId) +
             ', unit "' + (m.unit || 'none') + '"' +
             (m.available.length
               ? ' (the item has rows for: ' + m.available.join(', ') + ')'
@@ -1250,9 +1388,16 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
       const noUuid = missing.filter((m) => m.reason === 'NO_UUID');
       if (noUuid.length) {
+        const seen = {};
+        const names = [];
+        noUuid.forEach((m) => {
+          if (seen[m.itemId]) return;
+          seen[m.itemId] = true;
+          names.push(named(m.itemName, m.itemId));
+        });
         parts.push('These items have the right UOM Detail row but no Middleware ' +
           'product identifier, and publishing them from here did not produce ' +
-          'one: ' + dedupe(noUuid.map((m) => 'item ' + m.itemId)).join(', ') +
+          'one: ' + names.join(', ') +
           '. Open the item and read its RapidBridge Last Sync Try Result — it ' +
           'is usually eligibility, or a failed call.');
       }
@@ -1298,6 +1443,348 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           options: { ignoreMandatoryFields: true }
         });
       } catch (e) { /* a decoration; never worth failing the call over */ }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // §12 — order close, cancel and delete
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Has this save CLOSED or CANCELLED the order?
+     *
+     * A crossing, not a state: an order that was already closed and is saved
+     * again has nothing new to report. `Closed`, `Cancelled` and `Rejected by
+     * Supervisor` are the terminal statuses, and they are marked as such in
+     * C.TXN_STATUS rather than listed here.
+     */
+    const needsClose = (entry, ctx) => {
+      const type = ctx.newRecord.type;
+      const nowRow = util.statusEntry(type, statusOf(ctx.newRecord, true));
+      if (!nowRow || !nowRow.terminal) return false;
+      const wasRow = ctx.oldRecord
+        ? util.statusEntry(type, statusOf(ctx.oldRecord, false)) : null;
+      return !(wasRow && wasRow.terminal);
+    };
+
+    /** MARK_CLOSED · DELETE · NONE. Blank is MARK_CLOSED — §12.3. */
+    const closeActionOf = (cfg) => {
+      const v = String((cfg && cfg.closeAction) || '').toUpperCase();
+      if (v.indexOf('DELETE') !== -1) return 'DELETE';
+      if (v.indexOf('NONE') !== -1) return 'NONE';
+      return 'MARK_CLOSED';
+    };
+
+    /**
+     * The order was closed or cancelled in NetSuite. §12.
+     *
+     * WHAT HAPPENS IS CONFIGURED, and one of the three is destructive:
+     *
+     *   Mark closed  (the default) the destination transaction is told it is
+     *                manually closed and stays intact. Safe
+     *   Delete       the destination transaction is VOIDED. Destroys it, and
+     *                with it any DSCSA record hanging off it — which is why
+     *                the shipment guard below is not optional
+     *   None         nothing is sent
+     */
+    const runClose = (o) => {
+      const { entry, cfg, recordType, recordId } = o;
+      const trigger = o.trigger || C.TRIGGER.STATUS;
+      const correlation = o.correlation || util.uuid();
+      const operation = o.operation || C.OPERATION.CLOSE;
+
+      const header = o.header || readHeader(entry, recordType, recordId);
+      const unit = o.unit || txnUnit(entry, recordType, recordId, header);
+
+      // Never synchronized ⇒ there is nothing out there to close. No call and
+      // no log record: §12.7.
+      if (util.blank(unit.storedUuid)) {
+        logIo.closeStaleWorkItem(unit,
+          'Closed without a call: the order was closed in NetSuite and it was ' +
+          'never sent to the Middleware, so there is nothing to close there.');
+        logIo.stampTry(unit, C.TRY.NO_CHANGE, null, '');
+        return [{ skipped: true, reason: 'never synced' }];
+      }
+
+      // A real NetSuite DELETE is always a void — the close action governs a
+      // close or a cancel, not the disappearance of the record (§12.2).
+      const action = operation === C.OPERATION.VOID ? 'DELETE' : closeActionOf(cfg);
+
+      log.audit({
+        title: 'RB txn ' + operation + ' ' + recordType + '/' + recordId,
+        details: { uuid: unit.storedUuid, action: action }
+      });
+
+      if (action === 'NONE') {
+        logIo.stampTry(unit, C.TRY.NO_CHANGE, null, '');
+        return [{ skipped: true, reason: 'close action is None' }];
+      }
+
+      if (action === 'DELETE') {
+        const guard = shipmentGuard(entry, unit, cfg, correlation, trigger);
+        if (guard.refuse) {
+          logIo.openDeferred({
+            entry: entry, unit: unit, cfg: cfg,
+            reason: C.REASON.CLOSED_REMOTE,
+            status: C.STATUS.OPEN_REVIEW,          // a person must decide
+            outcome: C.OUTCOME.SKIPPED,
+            trigger: trigger, note: guard.note, correlation: correlation
+          });
+          logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null, guard.note);
+          return [{ ok: false, refused: true }];
+        }
+        return voidTransaction(entry, unit, cfg, correlation, trigger, operation);
+      }
+
+      return markClosed(entry, unit, cfg, correlation, trigger);
+    };
+
+    /**
+     * THE GUARD, and it is not optional. §12.3.
+     *
+     * Never void a transaction that has a shipment against it: the shipment is
+     * where the serial numbers live, and voiding the transaction destroys a
+     * DSCSA record. The check costs one read call, which is the difference
+     * between tidying up an unused order and erasing a compliance record.
+     *
+     * A read that FAILS refuses the void. Not being able to prove it is safe
+     * is not the same as it being safe.
+     *
+     * @returns {{refuse:boolean, note:string}}
+     */
+    const shipmentGuard = (entry, unit, cfg, correlation, trigger) => {
+      const token = C.TOKENS.TXN_READ[String(unit.recordType).toLowerCase()];
+      const target = logIo.resolveLogTarget({
+        entry: entry, unit: unit, operation: C.OPERATION.QUERY,
+        payload: '', cfg: cfg, reason: C.REASON.CLOSED_REMOTE
+      });
+      const res = client.call({
+        entry: entry, unit: unit, cfg: cfg, target: target,
+        endpoint: C.EP.TXN_READ,
+        pathParams: { txnType: token, uuid: unit.storedUuid },
+        body: null, operation: C.OPERATION.QUERY, payload: '',
+        trigger: trigger, correlation: correlation, requestUuid: correlation
+      });
+
+      if (res.dryRun || res.suppressed || res.skipped) {
+        logIo.closeNoAction(target, res,
+          'The shipment guard could not run because no call was made.');
+        return {
+          refuse: true,
+          note: 'The transaction could not be read to check for shipments ' +
+            '(no call was made: dry run, environment gate or kill switch), so ' +
+            'the void was refused. Voiding a transaction that has a shipment ' +
+            'destroys its serial-number record.'
+        };
+      }
+
+      if (!res.ok) {
+        logIo.closeFailure(target, res, cfg);
+        return {
+          refuse: true,
+          note: 'The transaction could not be read to check for shipments (' +
+            (res.errorMessage || 'the read failed') + '), so the void was ' +
+            'refused. Check it in TrackTraceRX and void it by hand if it is ' +
+            'safe to do so.'
+        };
+      }
+
+      logIo.closeSuccess(target, res);
+      const n = shipmentCountOf(res.body);
+      if (n > 0) {
+        return {
+          refuse: true,
+          note: 'This order was closed with the Delete close action, but its ' +
+            'destination transaction already has ' + n + ' shipment(s) against ' +
+            'it. Voiding it would destroy their serial-number record, so ' +
+            'nothing was sent. Someone has to decide what should happen.'
+        };
+      }
+      if (n < 0) {
+        // The object came back and said nothing at all about shipments. Taken
+        // as "none", because refusing here would refuse every void forever —
+        // but said out loud, because it is an assumption about their contract.
+        log.audit({
+          title: 'RB txn shipment guard: the response named no shipment field',
+          details: {
+            recordType: unit.recordType, recordId: unit.recordId,
+            uuid: unit.storedUuid,
+            note: 'Read as "no shipments" and the void was allowed. CONFIRM ' +
+              'with TrackTraceRX which field on the transaction read reports ' +
+              'its shipments.'
+          }
+        });
+      }
+      return { refuse: false, note: '' };
+    };
+
+    /**
+     * How many shipments the destination says this transaction has.
+     * @returns {number} -1 when the response does not mention shipments at all
+     */
+    const shipmentCountOf = (body) => {
+      if (!body || typeof body !== 'object') return -1;
+      const d = (body.data && typeof body.data === 'object') ? body.data : body;
+      if (Array.isArray(d.shipments)) return d.shipments.length;
+      if (Array.isArray(d.shipment_uuids)) return d.shipment_uuids.length;
+      if (d.nb_shipments !== undefined) return Number(d.nb_shipments) || 0;
+      if (d.shipment_count !== undefined) return Number(d.shipment_count) || 0;
+      if (!util.blank(d.shipment_uuid)) return 1;
+      return -1;
+    };
+
+    /** DELETE /transactions/{txnType}/{uuid}. The destructive one. */
+    const voidTransaction = (entry, unit, cfg, correlation, trigger, operation) => {
+      const token = C.TOKENS.TXN_VOID[String(unit.recordType).toLowerCase()];
+      const target = logIo.resolveLogTarget({
+        entry: entry, unit: unit, operation: C.OPERATION.VOID,
+        payload: '', cfg: cfg, reason: C.REASON.CLOSED_REMOTE
+      });
+      const res = client.call({
+        entry: entry, unit: unit, cfg: cfg, target: target,
+        endpoint: C.EP.TXN_VOID,
+        pathParams: { txnType: token, uuid: unit.storedUuid },
+        body: null, operation: C.OPERATION.VOID, payload: '',
+        trigger: trigger, correlation: correlation, requestUuid: correlation
+      });
+
+      if (res.ok) {
+        logIo.closeSuccess(target, res);
+        // §12.8 — the identifier is RETAINED, so the audit trail still shows
+        // what was voided. Only the synced flag and the stored payload go:
+        // the destination no longer holds what that payload described.
+        // Nothing is written back to a record that no longer exists.
+        if (unit.recordDeleted !== true) stampVoided(unit);
+        return [{ ok: true, voided: true }];
+      }
+
+      if (res.suppressed || res.dryRun) {
+        logIo.closeNoAction(target, res, 'Nothing was sent.');
+        logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
+        return [{ ok: false, suppressed: true }];
+      }
+
+      logIo.closeFailure(target, res, cfg);
+      if (unit.recordDeleted !== true)
+        logIo.stampTry(unit, C.TRY.FAIL_API, null, res.errorMessage);
+      return [{ ok: false, error: res.errorMessage }];
+    };
+
+    /** The order still exists; say what it now is. */
+    const stampVoided = (unit) => {
+      const values = {};
+      if (unit.syncedField) values[unit.syncedField] = false;
+      if (unit.payloadField) values[unit.payloadField] = '';
+      try {
+        record.submitFields({
+          type: unit.recordType, id: unit.recordId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) { log.error('Error @ txn stampVoided', e); }
+      logIo.stampTry(unit, C.TRY.SYNCED, null,
+        'The destination transaction was voided because this order was closed. ' +
+        'The identifier is kept so the audit trail shows what was removed.');
+    };
+
+    /**
+     * Mark closed — the safe action, and the default.
+     *
+     * The payload is the LAST ONE THE MIDDLEWARE ACCEPTED, with the manual-close
+     * flag flipped. Rebuilding it from the order would be wrong: by the time an
+     * order is closed its lines are usually all closed too, so a fresh build
+     * carries an EMPTY line set — and the update is a full replace, so it would
+     * wipe the destination's lines on the way to closing it.
+     */
+    const markClosed = (entry, unit, cfg, correlation, trigger) => {
+      const prev = util.safeJson(unit.storedPayload || '');
+      if (!prev) {
+        const note = 'The order was closed, but NetSuite does not hold the ' +
+          'payload the Middleware last accepted, so the close could not be ' +
+          'sent without risking the destination line set. Close the ' +
+          'transaction in TrackTraceRX by hand.';
+        logIo.openDeferred({
+          entry: entry, unit: unit, cfg: cfg,
+          reason: C.REASON.CLOSED_REMOTE,
+          status: C.STATUS.OPEN_REVIEW, outcome: C.OUTCOME.SKIPPED,
+          trigger: trigger, note: note, correlation: correlation
+        });
+        logIo.stampTry(unit, C.TRY.FAIL_PRE_API, null, note);
+        return [{ ok: false, blocked: 'no stored payload' }];
+      }
+
+      prev.is_manually_close_transaction = true;
+      prev.transaction_uuid = unit.storedUuid;
+
+      const payloadStr = util.canonicalCompare(prev);
+      const token = C.TOKENS.TXN_UPDATE[String(unit.recordType).toLowerCase()];
+      const target = logIo.resolveLogTarget({
+        entry: entry, unit: unit, operation: C.OPERATION.CLOSE,
+        payload: payloadStr, cfg: cfg, reason: C.REASON.CLOSED_REMOTE
+      });
+      const res = client.call({
+        entry: entry, unit: unit, cfg: cfg, target: target,
+        endpoint: C.EP.TXN_UPDATE,
+        pathParams: { txnType: token, uuid: unit.storedUuid },
+        body: util.stripCompare(prev), operation: C.OPERATION.CLOSE,
+        payload: payloadStr, trigger: trigger,
+        correlation: correlation, requestUuid: correlation
+      });
+
+      if (res.ok) {
+        // The payload IS stored, so re-saving the closed order does not send
+        // the close again on every save.
+        sync.writeBackSuccess(entry, unit, unit.storedUuid, payloadStr, cfg);
+        logIo.closeSuccess(target, res);
+        return [{ ok: true, closed: true }];
+      }
+      if (res.suppressed || res.dryRun) {
+        logIo.closeNoAction(target, res, 'Nothing was sent.');
+        logIo.stampTry(unit, res.suppressed ? C.TRY.SUPPRESSED_ENV : C.TRY.DRY_RUN);
+        return [{ ok: false, suppressed: true }];
+      }
+      sync.writeBackFailure(entry, unit, res.errorMessage);
+      logIo.closeFailure(target, res, cfg);
+      return [{ ok: false, error: res.errorMessage }];
+    };
+
+    /**
+     * The order was DELETED in NetSuite. §12.2 — the destination transaction is
+     * voided, always, whatever the close action says, and the shipment guard
+     * still applies.
+     *
+     * Everything is read from `oldRecord`: there is no record left to look up,
+     * and nothing can be written back to it either.
+     */
+    const runDelete = (entry, oldRecord, cfg) => {
+      if (!oldRecord || !oldRecord.id) return [{ skipped: true }];
+      const f = entry.fields;
+      let uuid = '';
+      try { uuid = String(oldRecord.getValue({ fieldId: f.uuid }) || ''); }
+      catch (e) { uuid = ''; }
+
+      if (!uuid) {
+        log.audit({
+          title: 'RB txn deleted order was never synchronized',
+          details: oldRecord.type + '/' + oldRecord.id + ' — nothing to void.'
+        });
+        return [{ skipped: true, reason: 'never synced' }];
+      }
+
+      const unit = Object.assign(
+        stampUnit(entry, oldRecord.type, oldRecord.id),
+        {
+          storedUuid: uuid,
+          // Nothing may be written back to a record that no longer exists, and
+          // the typed Sync Log subject field cannot take its id either.
+          recordDeleted: true, subjectDeleted: true
+        });
+
+      return runClose({
+        entry: entry, cfg: cfg,
+        recordType: oldRecord.type, recordId: oldRecord.id,
+        unit: unit, header: {},
+        operation: C.OPERATION.VOID,
+        trigger: C.TRIGGER.INITIAL
+      });
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1370,17 +1857,29 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
      * and NOT an error — it is the count of orders nobody has released.
      */
     const stampDeferred = (entry, recordType, recordId) => {
+      const row = util.statusEntry(recordType,
+        statusOf({ type: recordType, id: recordId }, true));
+
+      // A CLOSED or CANCELLED order is not waiting for anything, and telling
+      // somebody it "will be sent as soon as it reaches Pending Receipt" sends
+      // them looking for a release that is never coming.
+      const note = (row && row.terminal)
+        ? 'Not sent: this order is ' + row.name + ', so it is finished and ' +
+          'nothing further will be sent for it. Re-open it if it should ' +
+          'synchronize again. This is not an error.'
+        : 'Not sent: this order is not yet in a status from which it can be ' +
+          'synchronized. It will be sent as soon as it reaches one of: ' +
+          util.syncStatusNames(recordType).join(', ') + '. This is not an error.';
+
       logIo.stampTry(stampUnit(entry, recordType, recordId),
-        C.TRY.DEFER_APPROVAL, null,
-        'Not sent: this order is not yet in a status from which it can be ' +
-        'synchronized. It will be sent as soon as it reaches one of: ' +
-        util.syncStatusNames(recordType).join(', ') + '. This is not an error.');
+        C.TRY.DEFER_APPROVAL, null, note);
     };
 
     return {
       run, builders, entryFor,
       classifyLines, filterLines, resolveProducts, atSyncStatus,
       lockSyncFields, clearAllSyncFields,
+      needsClose, runClose, runDelete,
       stampFlowDisabled, stampDeferred, stampNotImplemented
     };
   });

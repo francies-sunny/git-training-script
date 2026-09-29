@@ -157,7 +157,33 @@
     is_override_products_packaging_type_validation: false,              // Always false
     gtin14: "00300026145113",
     update_composition: true,                                           // True only when composition is not empty
-    composition: "[{"238133c2-6039-4a0c-9a57-dd94e227e1cc":"20"}]", // [{ base unit product UUID: Qty in Lowest Unit }]; empty on a base row
+    composition: "[{"238133c2-6039-4a0c-9a57-dd94e227e1cc":"20"}]",     // [{ base unit product UUID: Qty in Lowest Unit }]; empty on a base row
     is_bin_managed: false,                                              // Bin feature AND config Use Bins AND item Use Bins
     bin_feature_enabled: true                                           // NetSuite Bin Management feature in effect
+}
+
+# Purchase Order
+{
+    "transaction_uuid": "f4efb87c-e483-4f31-b91c-dcfe21382bb6",
+    "custom_id": "PO446",
+    "location_uuid": "800930e8-1609-4b50-a8ef-929088f89a11",
+    "trading_partner_uuid": "358a9c44-48c1-47a2-833d-8bf1970ad350",
+    "transaction_date": "2026-09-28",
+    "billing_address_uuid": "",
+    "ship_from_address_uuid": "ac519f3d-0f02-46db-9b1f-5a410104f56f",
+    "ship_to_address_uuid": "",
+    "sold_by_address_uuid": "ac519f3d-0f02-46db-9b1f-5a410104f56f",
+    "line_items": [
+        {
+            "product_uuid": "c427a199-a6e2-472a-9f3f-36706c00358c",
+            "quantity": 1,
+            "sort_order": "1"
+        }
+    ],
+    "is_approved": true,                                                // Always true
+    "is_approved_is_ship_transaction": false,                           // Always false for purchase orders
+    "is_manually_close_transaction": false,
+    "enforce_oci": false,                                               // Always false for purchase orders
+    "order_nbr": "PO446",
+    "po_nbr": "PO446"
 }

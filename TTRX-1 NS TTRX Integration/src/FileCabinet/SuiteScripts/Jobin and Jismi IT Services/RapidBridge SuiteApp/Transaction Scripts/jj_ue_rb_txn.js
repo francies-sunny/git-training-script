@@ -117,16 +117,20 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         const recordType = ctx.newRecord.type;
         const recordId = ctx.newRecord.id;
 
-        // Order close, cancel and delete are guide §12 and are not part of the
-        // approved transitions built in this phase. A delete therefore sends
-        // nothing — and says so, rather than going quiet.
+        // ── §12.2 — THE ORDER WAS DELETED. The destination transaction is
+        //    voided, always, whatever the Close Action says — and the shipment
+        //    guard still refuses to void one that has a shipment against it.
+        //
+        //    Everything comes off oldRecord: there is no record left to read,
+        //    and nothing can be written back to it. Nothing is RETURNED out of
+        //    the entry point either — NetSuite serialises what an entry point
+        //    returns, and the result objects are not meant to leave the script.
         if (ctx.type === ctx.UserEventType.DELETE) {
-          log.audit({
-            title: 'RB txn delete not synchronized',
-            details: 'Order close, cancel and delete are not built in this ' +
-              'phase, so the destination transaction for ' + recordType + '/' +
-              (ctx.oldRecord && ctx.oldRecord.id) + ' was left in place.'
-          });
+          const cfgDel = config.get();
+          if (!cfgDel) return;
+          const flowDel = config.flow(entry);
+          if (!flowDel || flowDel.enabled !== true) return;
+          txn.runDelete(entry, ctx.oldRecord, cfgDel);
           return;
         }
 
@@ -188,6 +192,18 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         const crossed = txn.atSyncStatus(entry, ctx);
 
         if (crossed === false) {
+          // ── §12 — NOT eligible can mean two different things. An order that
+          //    has just been CLOSED or CANCELLED is not waiting for anything;
+          //    it is finished, and the destination has to be told. Everything
+          //    else is an order that has not been released yet.
+          if (txn.needsClose(entry, ctx)) {
+            txn.runClose({
+              entry: entry, cfg: cfg,
+              recordType: recordType, recordId: recordId,
+              trigger: C.TRIGGER.STATUS
+            });
+            return;
+          }
           // Not eligible yet. The common case, and not an error.
           txn.stampDeferred(entry, recordType, recordId);
           return;

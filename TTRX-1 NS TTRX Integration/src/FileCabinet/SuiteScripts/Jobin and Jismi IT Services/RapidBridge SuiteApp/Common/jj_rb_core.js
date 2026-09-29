@@ -72,7 +72,10 @@ define(['N/search'],
       //    is not deployed to the account fails the whole configuration read,
       //    so deploy the configuration record with the code.
       soEnabled: 'custrecord_jj_rb_cf_so_enabled',
-      poEnabled: 'custrecord_jj_rb_cf_po_enabled'
+      poEnabled: 'custrecord_jj_rb_cf_po_enabled',
+      // What a NetSuite close or cancel does to the destination transaction.
+      // MARK_CLOSED · DELETE · NONE — §12.3.
+      closeAction: 'custrecord_jj_rb_cf_close_action'
       //
       // NO STATUS GATE FIELD, AND NO APPROVAL FIELD. Which statuses make an
       // order syncable is a fact about NETSUITE, not about the client: an
@@ -211,7 +214,12 @@ define(['N/search'],
     });
     const OPERATION = Object.freeze({
       CREATE: 'Create', UPDATE: 'Update', DELETE: 'Delete',
-      INACTIVATE: 'Inactivate', REACTIVATE: 'Reactivate', QUERY: 'Query'
+      INACTIVATE: 'Inactivate', REACTIVATE: 'Reactivate', QUERY: 'Query',
+      // ── transactions, guide §12. `Close` covers a NetSuite close and a
+      //    cancel alike — both mean "this order will not go any further".
+      //    `Void` is the destructive one, and only a NetSuite DELETE or the
+      //    Delete close action reaches it.
+      CLOSE: 'Close', VOID: 'Void'
     });
     const REASON = Object.freeze({
       NEVER_SYNCED: 'Never synced', PAYLOAD_CHANGED: 'Payload changed since last sync',
@@ -220,7 +228,10 @@ define(['N/search'],
       NOT_ELIGIBLE: 'Not eligible - check classification',
       AWAITING_DECISION: 'Awaiting manual decision',
       DUPLICATE_OPEN: 'Duplicate open work items',
-      RETRY_EXHAUSTED: 'Retry exhausted'
+      RETRY_EXHAUSTED: 'Retry exhausted',
+      // ── transactions, guide §12.
+      CLOSED_REMOTE: 'Order closed but still open remotely',
+      RECOVER_UUID: 'Recover lost UUID'
     });
 
     /**
@@ -254,23 +265,23 @@ define(['N/search'],
       salesorder: Object.freeze([
         { id: 11, ref: 'SalesOrd:A', key: 'pendingApproval', name: 'Pending Approval', sync: false },
         { id: 12, ref: 'SalesOrd:B', key: 'pendingFulfillment', name: 'Pending Fulfillment', sync: true },
-        { id: 13, ref: 'SalesOrd:C', key: 'cancelled', name: 'Cancelled', sync: false },
+        { id: 13, ref: 'SalesOrd:C', key: 'cancelled', name: 'Cancelled', sync: false, terminal: true },
         { id: 14, ref: 'SalesOrd:D', key: 'partiallyFulfilled', name: 'Partially Fulfilled', sync: true },
         { id: 15, ref: 'SalesOrd:E', key: 'pendingBillingPartFulfilled', name: 'Pending Billing/Partially Fulfilled', sync: true },
         { id: 16, ref: 'SalesOrd:F', key: 'pendingBilling', name: 'Pending Billing', sync: true },
         { id: 17, ref: 'SalesOrd:G', key: 'billed', name: 'Billed', sync: true },
-        { id: 18, ref: 'SalesOrd:H', key: 'closed', name: 'Closed', sync: false },
+        { id: 18, ref: 'SalesOrd:H', key: 'closed', name: 'Closed', sync: false, terminal: true },
         { id: 19, ref: null, key: 'undefined', name: 'Undefined', sync: false }
       ]),
       purchaseorder: Object.freeze([
         { id: 53, ref: 'PurchOrd:A', key: 'pendingSupervisorApproval', name: 'Pending Supervisor Approval', sync: false },
         { id: 54, ref: 'PurchOrd:B', key: 'pendingReceipt', name: 'Pending Receipt', sync: true },
-        { id: 55, ref: 'PurchOrd:C', key: 'rejectedBySupervisor', name: 'Rejected by Supervisor', sync: false },
+        { id: 55, ref: 'PurchOrd:C', key: 'rejectedBySupervisor', name: 'Rejected by Supervisor', sync: false, terminal: true },
         { id: 56, ref: 'PurchOrd:D', key: 'partiallyReceived', name: 'Partially Received', sync: true },
         { id: 57, ref: 'PurchOrd:E', key: 'pendingBillingPartReceived', name: 'Pending Billing/Partially Received', sync: true },
         { id: 58, ref: 'PurchOrd:F', key: 'pendingBill', name: 'Pending Bill', sync: true },
         { id: 59, ref: 'PurchOrd:G', key: 'fullyBilled', name: 'Fully Billed', sync: true },
-        { id: 60, ref: 'PurchOrd:H', key: 'closed', name: 'Closed', sync: false },
+        { id: 60, ref: 'PurchOrd:H', key: 'closed', name: 'Closed', sync: false, terminal: true },
         { id: 61, ref: null, key: 'undefined', name: 'Undefined', sync: false },
         { id: 326, ref: null, key: 'planned', name: 'Planned', sync: false }
       ])
@@ -369,7 +380,10 @@ define(['N/search'],
       // Declared, not wired. Order close, cancel and delete (§12) are not part
       // of the approved transitions built in this phase; the endpoint is here
       // so that chapter is a builder rather than an edit to this file.
-      TXN_VOID: { method: 'DELETE', path: '/transactions/{txnType}/{uuid}' }
+      TXN_VOID: { method: 'DELETE', path: '/transactions/{txnType}/{uuid}' },
+      // Read one transaction back. Used by ONE thing: the guard that refuses
+      // to void a transaction which already has a shipment against it (§12.3).
+      TXN_READ: { method: 'GET', path: '/transactions/{txnType}/{uuid}' }
     });
 
     /**
@@ -384,6 +398,7 @@ define(['N/search'],
       TXN_CREATE: { salesorder: 'sales', purchaseorder: 'purchase' },
       TXN_UPDATE: { salesorder: 'sales', purchaseorder: 'purchase' },
       TXN_VOID: { salesorder: 'sales', purchaseorder: 'purchase' },
+      TXN_READ: { salesorder: 'sales', purchaseorder: 'purchase' },
       TXN_LIST: { salesorder: 'sale', purchaseorder: 'purchase' }   // ← sale
     });
 
@@ -410,28 +425,33 @@ define(['N/search'],
     });
 
     /** The transaction column fields. The line filter has to be visible on the line. */
+    /**
+     * The transaction column fields. The line filter has to be visible on the
+     * line — §5.3.
+     *
+     * ── THERE WAS A SOURCED `custcol_jj_rb_item_eligible`, AND IT IS GONE ────
+     * It mirrored the item's own TrackTrace Eligibility onto the line through
+     * NetSuite's field sourcing, so a line could be read with no script at all.
+     * It duplicated `serialized` and it was the weaker of the two:
+     *
+     *   `serialized` is what THIS INTEGRATION decided, and it stays correct
+     *   when a client points the configured Eligibility Field ID at their own
+     *   item field.
+     *
+     *   The sourced column is wired to `custitem_jj_rb_eligible` in the OBJECT
+     *   and cannot follow that setting, so in exactly that account it would sit
+     *   on the form showing "No" beside a line the integration is syncing. A
+     *   column that is right in some accounts and misleading in others, on the
+     *   same form, is worse than not having it.
+     *
+     * One field, one answer. `serialized` is stamped in beforeSubmit on every
+     * save, including a CSV import, so nothing is lost.
+     */
     const LINE = Object.freeze({
-      // SOURCED from the item (Source List = Item, Source From = TrackTrace
-      // Eligibility). Nothing writes it; NetSuite fills it when the item is
-      // chosen. It is what lets a user, a saved search and the reconciliation
-      // page tell a sync-required line from a non-sync-required one with no
-      // script at all — and it saves the classification a search per save.
-      itemEligible: 'custcol_jj_rb_item_eligible',
       serialized: 'custcol_jj_rb_serialized',
       productUuid: 'custcol_jj_rb_product_uuid',
       qtySynced: 'custcol_jj_rb_qty_synced'
     });
-
-    /**
-     * The item field the sourced column above is wired to, fixed in the OBJECT.
-     *
-     * The Eligibility Field ID on the configuration lets a client point
-     * eligibility at their own item field. Sourcing cannot follow that — the
-     * source is part of the field definition — so the sourced column is trusted
-     * only while the configured id is still this one. Anything else falls back
-     * to reading the configured field. §5.3.
-     */
-    const SOURCED_ELIG_FIELD = 'custitem_jj_rb_eligible';
 
     /**
      * The base unit is ALWAYS Each — proposal v4 §5.2. A constant, not a
@@ -806,7 +826,7 @@ define(['N/search'],
       DIRECTION, SYNCTYPE, OPERATION, REASON,
       // transactions
       TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
-      TXN_STATUS, SOURCED_ELIG_FIELD
+      TXN_STATUS
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1136,6 +1156,12 @@ define(['N/search'],
           // a raw 'F' is truthy as a string and would enable a disabled flow.
           row.soEnabled = util.truthy(row.soEnabled);
           row.poEnabled = util.truthy(row.poEnabled);
+          // Free-form text, so the *Text alias is the wrong one to read — the
+          // trap inactiveMethod fell into. Blank means MARK_CLOSED: it is the
+          // useful answer and the only one of the three that is not
+          // destructive, and voiding is irreversible (J-03).
+          row.closeAction = String(row.closeAction || '')
+            .trim().toUpperCase().replace(/[^A-Z]+/g, '_') || 'MARK_CLOSED';
           row.envLabel = row.envLabelText || 'PRODUCTION';
           row.contentType = row.contentTypeText || 'application/x-www-form-urlencoded';
           // TEXT field, not a list: getText() returns null for a free-form

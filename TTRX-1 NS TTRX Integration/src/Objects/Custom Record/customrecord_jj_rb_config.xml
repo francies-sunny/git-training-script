@@ -1659,8 +1659,8 @@ UNMAPPED — Falls back to id 1 and is logged. INVALID JSON — Logged and treat
       <checkspelling>F</checkspelling>
       <defaultchecked>F</defaultchecked>
       <defaultselection></defaultselection>
-      <defaultvalue></defaultvalue>
-      <description>What to do to the NetSuite order when the Middleware reports it closed: Delete, Mark closed, or None. Guarded - Delete is refused once any fulfilment or receipt exists.</description>
+      <defaultvalue>Mark closed</defaultvalue>
+      <description>What a CLOSE or a CANCEL in NetSuite does to the destination transaction. &quot;Mark closed&quot; (the default, and what a blank means) sets the manual-close flag and leaves the transaction intact - safe. &quot;Delete&quot; VOIDS it, which destroys it and any serial-number record hanging off it; it is refused whenever the transaction already has a shipment, and refused too when that check cannot be run. &quot;None&quot; sends nothing and the destination accumulates open transactions. A NetSuite DELETE of the order ignores this setting and always voids, because the record it described is gone - the shipment guard still applies.</description>
       <displayheight></displayheight>
       <displaytype>NORMAL</displaytype>
       <displaywidth></displaywidth>
@@ -1669,7 +1669,7 @@ UNMAPPED — Falls back to id 1 and is logged. INVALID JSON — Logged and treat
       <encryptatrest>F</encryptatrest>
       <fieldtype>TEXT</fieldtype>
       <globalsearch>F</globalsearch>
-      <help>What to do to the NetSuite order when the Middleware reports it closed: Delete, Mark closed, or None. Guarded - Delete is refused once any fulfilment or receipt exists.</help>
+      <help>What a CLOSE or a CANCEL in NetSuite does to the destination transaction. &quot;Mark closed&quot; (the default, and what a blank means) sets the manual-close flag and leaves the transaction intact - safe. &quot;Delete&quot; VOIDS it, which destroys it and any serial-number record hanging off it; it is refused whenever the transaction already has a shipment, and refused too when that check cannot be run. &quot;None&quot; sends nothing and the destination accumulates open transactions. A NetSuite DELETE of the order ignores this setting and always voids, because the record it described is gone - the shipment guard still applies.</help>
       <isformula>F</isformula>
       <ismandatory>F</ismandatory>
       <isparent>F</isparent>
@@ -1690,7 +1690,7 @@ UNMAPPED — Falls back to id 1 and is logged. INVALID JSON — Logged and treat
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab>[scriptid=customrecord_jj_rb_config.tab_rb_cf_inbound]</subtab>
+      <subtab>[scriptid=customrecord_jj_rb_config.tab_rb_cf_flows]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_cf_poll_enabled">
       <accesslevel>2</accesslevel>

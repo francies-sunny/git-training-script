@@ -52,5 +52,13 @@
       <isinactive>F</isinactive>
       <value>Awaiting manual decision</value>
     </customvalue>
+    <customvalue scriptid="val_closed_remote">
+      <isinactive>F</isinactive>
+      <value>Order closed but still open remotely</value>
+    </customvalue>
+    <customvalue scriptid="val_recover_lost_uuid">
+      <isinactive>F</isinactive>
+      <value>Recover lost UUID</value>
+    </customvalue>
   </customvalues>
 </customlist>
