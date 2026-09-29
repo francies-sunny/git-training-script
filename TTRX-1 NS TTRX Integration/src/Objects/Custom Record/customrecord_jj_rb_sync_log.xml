@@ -279,7 +279,7 @@
       <searchdefault></searchdefault>
       <searchlevel>2</searchlevel>
       <selectrecordtype>[scriptid=customlist_jj_rb_operation]</selectrecordtype>
-      <showinlist>F</showinlist>
+      <showinlist>T</showinlist>
       <sourcefilterby></sourcefilterby>
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
@@ -407,7 +407,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_uom">
       <accesslevel>2</accesslevel>
@@ -448,7 +448,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_entity">
       <accesslevel>2</accesslevel>
@@ -489,7 +489,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_location">
       <accesslevel>2</accesslevel>
@@ -530,7 +530,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_bin">
       <accesslevel>2</accesslevel>
@@ -571,7 +571,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_dosage">
       <accesslevel>2</accesslevel>
@@ -612,7 +612,7 @@
       <sourcefrom></sourcefrom>
       <sourcelist></sourcelist>
       <storevalue>T</storevalue>
-      <subtab></subtab>
+      <subtab>[scriptid=customrecord_jj_rb_sync_log.tab_rb_sl_masters]</subtab>
     </customrecordcustomfield>
     <customrecordcustomfield scriptid="custrecord_jj_rb_sl_status">
       <accesslevel>2</accesslevel>
@@ -2611,6 +2611,10 @@
     <subtab scriptid="tab_rb_sl_txn">
       <tabparent></tabparent>
       <tabtitle>Transaction</tabtitle>
+    </subtab>
+    <subtab scriptid="tab_rb_sl_masters">
+      <tabparent></tabparent>
+      <tabtitle>Masters</tabtitle>
     </subtab>
   </subtabs>
 </customrecordtype>

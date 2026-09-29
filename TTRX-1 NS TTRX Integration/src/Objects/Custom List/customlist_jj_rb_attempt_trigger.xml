@@ -36,5 +36,9 @@
       <isinactive>F</isinactive>
       <value>Dependency Pre-sync</value>
     </customvalue>
+    <customvalue scriptid="val_status_change">
+      <isinactive>F</isinactive>
+      <value>Status Change</value>
+    </customvalue>
   </customvalues>
 </customlist>

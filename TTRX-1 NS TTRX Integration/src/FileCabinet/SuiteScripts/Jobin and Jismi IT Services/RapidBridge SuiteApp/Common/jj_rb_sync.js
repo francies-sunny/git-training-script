@@ -3189,7 +3189,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       writeBackSuccess, writeBackFailure,
       lockSyncFields, clearAllSyncFields, cacheForDelete, handleDelete,
       validateConfig, validateUomRow, validateItem,
-      ensureParentLocation, isEligible,
+      // ensureParentRecord is exported for the TRANSACTION orchestrator: an
+      // order names its trading partner and its location by UUID, so neither
+      // can be a stranger, and the dependency pre-sync is the same one a
+      // sub-customer already uses for its parent. Transaction guide v3.1 §7.4.
+      ensureParentRecord, ensureParentLocation, isEligible,
       packSizeTypeOf, isLeafRow, compositionOf,
       locationAddresses, entityAddresses,
       // resolveStateId, 

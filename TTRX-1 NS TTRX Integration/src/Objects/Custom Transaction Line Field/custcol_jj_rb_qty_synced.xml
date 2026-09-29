@@ -1,0 +1,51 @@
+<transactioncolumncustomfield scriptid="custcol_jj_rb_qty_synced">
+  <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
+  <applyformatting>F</applyformatting>
+  <colbuild>F</colbuild>
+  <colexpense>F</colexpense>
+  <colexpensereport>F</colexpensereport>
+  <colgrouponinvoices>F</colgrouponinvoices>
+  <colinventoryadjustment>F</colinventoryadjustment>
+  <colitemfulfillment>T</colitemfulfillment>
+  <colitemfulfillmentorder>F</colitemfulfillmentorder>
+  <colitemreceipt>T</colitemreceipt>
+  <colitemreceiptorder>F</colitemreceiptorder>
+  <coljournal>F</coljournal>
+  <colkititem>F</colkititem>
+  <colopportunity>F</colopportunity>
+  <colpackingslip>F</colpackingslip>
+  <colpickingticket>F</colpickingticket>
+  <colprintflag>F</colprintflag>
+  <colpurchase>T</colpurchase>
+  <colreturnform>F</colreturnform>
+  <colsale>T</colsale>
+  <colstorewithgroups>F</colstorewithgroups>
+  <coltransferorder>T</coltransferorder>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>The quantity actually sent for this line, in the unit the line is priced in. It can differ from the ordered quantity, and on a mixed order the destination&apos;s totals will not match NetSuite&apos;s - that is correct and intended, because only trackable lines travel.</description>
+  <displayheight></displayheight>
+  <displaytype>LOCKED</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>FLOAT</fieldtype>
+  <help>The quantity actually sent for this line, in the unit the line is priced in. It can differ from the ordered quantity, and on a mixed order the destination&apos;s totals will not match NetSuite&apos;s - that is correct and intended, because only trackable lines travel.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>Quantity Synchronized</label>
+  <linktext></linktext>
+  <maxlength></maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype></selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</transactioncolumncustomfield>

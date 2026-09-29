@@ -18,7 +18,7 @@
     </customvalue>
     <customvalue scriptid="val_skip_feature">
       <isinactive>F</isinactive>
-      <value>Skipped - feature LOCKED</value>
+      <value>Skipped - feature disabled</value>
     </customvalue>
     <customvalue scriptid="val_block_no_uom">
       <isinactive>F</isinactive>
@@ -55,6 +55,10 @@
     <customvalue scriptid="val_deferred_maintenance">
       <isinactive>F</isinactive>
       <value>Deferred - upstream maintenance</value>
+    </customvalue>
+    <customvalue scriptid="val_skip_no_serial">
+      <isinactive>F</isinactive>
+      <value>Skipped - no serialized lines</value>
     </customvalue>
   </customvalues>
 </customlist>

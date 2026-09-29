@@ -56,7 +56,31 @@ define(['N/search'],
       dryRun: 'custrecord_jj_rb_cf_dryrun',
       // the environment gate — §20.2
       envLabel: 'custrecord_jj_rb_cf_env_label',
-      allowNonprod: 'custrecord_jj_rb_cf_allow_nonprod'
+      allowNonprod: 'custrecord_jj_rb_cf_allow_nonprod',
+
+      // ── TRANSACTIONS. Transaction Developer Guide v3.1 §4.3.1.
+      //
+      //    The guide puts these on a child record, `customrecord_jj_rb_flow_
+      //    config`, one row per flow. They live HERE instead: the two Phase 1
+      //    outbound flows need three values each, the fields already exist on
+      //    the configuration record, and a child record with two rows in it
+      //    would be a join on every transaction save for nothing. `config.flow`
+      //    below hides the difference, so a later move to the child record is
+      //    one function, not a rewrite.
+      //
+      //    EVERY key here becomes a search COLUMN in config.get(). A field that
+      //    is not deployed to the account fails the whole configuration read,
+      //    so deploy the configuration record with the code.
+      soEnabled: 'custrecord_jj_rb_cf_so_enabled',
+      poEnabled: 'custrecord_jj_rb_cf_po_enabled'
+      //
+      // NO STATUS GATE FIELD, AND NO APPROVAL FIELD. Which statuses make an
+      // order syncable is a fact about NETSUITE, not about the client: an
+      // order is sendable once it has reached a status in which it can be
+      // fulfilled or received. That set is the platform's own, so it lives in
+      // TXN_STATUS below rather than being re-entered per account — and there
+      // is nothing to type wrongly, nothing to leave blank, and no approval
+      // workflow to detect. See §7.3.1 and the note on TXN_STATUS.
     });
 
     /**
@@ -104,7 +128,14 @@ define(['N/search'],
       resolvedOn: 'custrecord_jj_rb_sl_resolved_on',
       resolution: 'custrecord_jj_rb_sl_resolution',
       mergedInto: 'custrecord_jj_rb_sl_merged_into',
-      mergedCount: 'custrecord_jj_rb_sl_merged_count'
+      mergedCount: 'custrecord_jj_rb_sl_merged_count',
+      // ── transactions. Guide v3.1 §5.4.2. Four fields, and no fifth: there
+      //    is no per-line result array, because an inbound write creates the
+      //    record or creates nothing.
+      transaction: 'custrecord_jj_rb_sl_transaction',
+      shipmentUuid: 'custrecord_jj_rb_sl_shipment_uuid',
+      lineTotal: 'custrecord_jj_rb_sl_line_total',
+      lineSent: 'custrecord_jj_rb_sl_line_sent'
     });
 
     /**
@@ -149,7 +180,11 @@ define(['N/search'],
       BLOCK_NO_PARENT: 'Blocked - missing parent UUID',
       FAIL_API: 'Failed - API error', FAIL_PRE_API: 'Failed - before API call',
       DEFERRED: 'Deferred - inline cap', DRY_RUN: 'Dry run',
-      SUPPRESSED_ENV: 'Suppressed - environment gate'
+      SUPPRESSED_ENV: 'Suppressed - environment gate',
+      // ── transactions. Guide v3.1 §3.2. Neither is an error: on a busy day
+      //    they are the two most common stamps in the account.
+      DEFER_APPROVAL: 'Deferred - awaiting approval',
+      SKIP_NO_SERIAL: 'Skipped - no serialized lines'
     });
 
     const OUTCOME = Object.freeze({
@@ -161,14 +196,18 @@ define(['N/search'],
     const TRIGGER = Object.freeze({
       INITIAL: 'Initial', AUTO_RETRY: 'Auto Retry', MANUAL_RETRY: 'Manual Retry',
       NEW_SYNC: 'New Sync', MASS_UPDATE: 'Mass Update', CSV: 'CSV Import',
-      RECON: 'Reconciliation Sweep', PRESYNC: 'Dependency Pre-sync'
+      RECON: 'Reconciliation Sweep', PRESYNC: 'Dependency Pre-sync',
+      // The work item exists because a STATUS moved, not because field data
+      // changed — in Phase 1 that means an order reaching its gate. §7.3.1.
+      STATUS: 'Status Change'
     });
     const DIRECTION = Object.freeze({
       OUTBOUND: 'Outbound (NS - MW)', INBOUND: 'Inbound (MW - NS)', INTERNAL: 'Internal'
     });
     const SYNCTYPE = Object.freeze({
       ITEM: 'Item', DOSAGE_FORM: 'Dosage Form', CUSTOMER: 'Customer', VENDOR: 'Vendor',
-      ADDRESS: 'Address', LOCATION: 'Location', BIN: 'Bin', RECONCILIATION: 'Reconciliation'
+      ADDRESS: 'Address', LOCATION: 'Location', BIN: 'Bin', RECONCILIATION: 'Reconciliation',
+      SALES_ORDER: 'Sales Order', PURCHASE_ORDER: 'Purchase Order'
     });
     const OPERATION = Object.freeze({
       CREATE: 'Create', UPDATE: 'Update', DELETE: 'Delete',
@@ -183,6 +222,108 @@ define(['N/search'],
       DUPLICATE_OPEN: 'Duplicate open work items',
       RETRY_EXHAUSTED: 'Retry exhausted'
     });
+
+    /**
+     * NETSUITE'S OWN TRANSACTION STATUSES. Not a custom list — these are the
+     * platform's, and `sync` says which of them mean "this order has reached a
+     * state where it can be sent".
+     *
+     * ── WHY THIS IS NOT CONFIGURATION ───────────────────────────────────────
+     * The question the engine has to answer is "has this order reached a
+     * status in which it is eligible to sync?" — nothing more. It is NOT "does
+     * this account use approval routing?", and it must not be: an account
+     * without an approval workflow never produces `Pending Approval` at all,
+     * so anything that keyed off an approval status would sync nothing there.
+     *
+     * An order becomes eligible the moment it can be fulfilled or received,
+     * and stays eligible through billing, so an edit after fulfilment is an
+     * update rather than something silently deferred. `Closed`, `Cancelled`,
+     * `Rejected by Supervisor`, `Undefined` and `Planned` are NOT eligible:
+     * they are ends, not stages, and order close is its own chapter.
+     *
+     * ── WHY EACH ROW CARRIES FOUR SPELLINGS ─────────────────────────────────
+     * NetSuite hands the same status back in different shapes depending on how
+     * it is read — the numeric id from a Transaction Status reference, the
+     * `SalesOrd:B` form from a search's statusref column, the camelCase form
+     * from search.lookupFields, and the display text on the record. Each row
+     * carries all four, and `statusEntry()` matches on any of them, so no
+     * caller has to know which shape it is holding. The display text alone
+     * would not do: it is translated, and the codes are not.
+     */
+    const TXN_STATUS = Object.freeze({
+      salesorder: Object.freeze([
+        { id: 11, ref: 'SalesOrd:A', key: 'pendingApproval', name: 'Pending Approval', sync: false },
+        { id: 12, ref: 'SalesOrd:B', key: 'pendingFulfillment', name: 'Pending Fulfillment', sync: true },
+        { id: 13, ref: 'SalesOrd:C', key: 'cancelled', name: 'Cancelled', sync: false },
+        { id: 14, ref: 'SalesOrd:D', key: 'partiallyFulfilled', name: 'Partially Fulfilled', sync: true },
+        { id: 15, ref: 'SalesOrd:E', key: 'pendingBillingPartFulfilled', name: 'Pending Billing/Partially Fulfilled', sync: true },
+        { id: 16, ref: 'SalesOrd:F', key: 'pendingBilling', name: 'Pending Billing', sync: true },
+        { id: 17, ref: 'SalesOrd:G', key: 'billed', name: 'Billed', sync: true },
+        { id: 18, ref: 'SalesOrd:H', key: 'closed', name: 'Closed', sync: false },
+        { id: 19, ref: null, key: 'undefined', name: 'Undefined', sync: false }
+      ]),
+      purchaseorder: Object.freeze([
+        { id: 53, ref: 'PurchOrd:A', key: 'pendingSupervisorApproval', name: 'Pending Supervisor Approval', sync: false },
+        { id: 54, ref: 'PurchOrd:B', key: 'pendingReceipt', name: 'Pending Receipt', sync: true },
+        { id: 55, ref: 'PurchOrd:C', key: 'rejectedBySupervisor', name: 'Rejected by Supervisor', sync: false },
+        { id: 56, ref: 'PurchOrd:D', key: 'partiallyReceived', name: 'Partially Received', sync: true },
+        { id: 57, ref: 'PurchOrd:E', key: 'pendingBillingPartReceived', name: 'Pending Billing/Partially Received', sync: true },
+        { id: 58, ref: 'PurchOrd:F', key: 'pendingBill', name: 'Pending Bill', sync: true },
+        { id: 59, ref: 'PurchOrd:G', key: 'fullyBilled', name: 'Fully Billed', sync: true },
+        { id: 60, ref: 'PurchOrd:H', key: 'closed', name: 'Closed', sync: false },
+        { id: 61, ref: null, key: 'undefined', name: 'Undefined', sync: false },
+        { id: 326, ref: null, key: 'planned', name: 'Planned', sync: false }
+      ])
+    });
+
+    /**
+     * A status compared as data rather than as prose: case, spacing and
+     * punctuation fall away, so "Pending Fulfillment", "pendingFulfillment"
+     * and "PENDING_FULFILLMENT" are one value.
+     *
+     * The record-type prefix is NOT stripped here, and that is deliberate:
+     * strip it and `SalesOrd:B` and `PurchOrd:B` both collapse to "b", so a
+     * purchase status would match a sales row. statusEntry() handles the one
+     * prefixed shape that needs it — the Transaction Status display name — by
+     * comparing the part after the colon against the NAME only.
+     */
+    const normStatus = (v) => String(v === null || v === undefined ? '' : v)
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase();
+
+    /**
+     * The status row a value names, whatever shape the value arrived in.
+     * null when nothing matches — which is deliberately NOT the same as "not
+     * eligible", so the caller can say so out loud instead of going quiet.
+     */
+    const statusEntry = (recordType, value) => {
+      const rows = TXN_STATUS[String(recordType || '').toLowerCase()];
+      if (!rows) return null;
+      const raw = String(value === null || value === undefined ? '' : value).trim();
+      if (!raw) return null;
+      const n = normStatus(raw);
+      if (!n) return null;
+      // "Sales Order : Pending Fulfillment" — the Transaction Status record's
+      // own name carries the record type. Compared against the NAME alone,
+      // never against the ref, or SalesOrd:B and PurchOrd:B would both be "b".
+      const after = raw.indexOf(':') === -1
+        ? '' : normStatus(raw.substring(raw.lastIndexOf(':') + 1));
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (String(r.id) === raw) return r;
+        if (r.ref && normStatus(r.ref) === n) return r;
+        if (normStatus(r.key) === n) return r;
+        if (normStatus(r.name) === n) return r;
+        if (after && after.length > 1 && normStatus(r.name) === after) return r;
+      }
+      return null;
+    };
+
+    /** The names of the statuses an order of this type may be sent in. */
+    const syncStatusNames = (recordType) => {
+      const rows = TXN_STATUS[String(recordType || '').toLowerCase()] || [];
+      return rows.filter((r) => r.sync).map((r) => r.name);
+    };
 
     // ── Endpoints ──────────────────────────────────────────────────────────────
     const EP = Object.freeze({
@@ -218,8 +359,89 @@ define(['N/search'],
       // NetSuite record spells it; nothing is resolved to an id. Kept in the
       // catalogue because this file is the one place an endpoint is written.
       STATES: { method: 'GET', path: '/utility/country_list/{countryId}/states' },
-      HEALTH: { method: 'GET', path: '/health' }
+      HEALTH: { method: 'GET', path: '/health' },
+
+      // ── transactions. Guide v3.1 §6.2. {txnType} is NOT a constant: the
+      //    destination spells the same concept four different ways, so the
+      //    token is substituted per operation from TOKENS below.
+      TXN_CREATE: { method: 'POST', path: '/transactions/{txnType}' },
+      TXN_UPDATE: { method: 'PUT', path: '/transactions/{txnType}/{uuid}' },
+      // Declared, not wired. Order close, cancel and delete (§12) are not part
+      // of the approved transitions built in this phase; the endpoint is here
+      // so that chapter is a builder rather than an edit to this file.
+      TXN_VOID: { method: 'DELETE', path: '/transactions/{txnType}/{uuid}' }
     });
+
+    /**
+     * §6.3 — the path-token table.
+     *
+     * `POST /transactions/{type}` wants `sales`; `GET /transactions/{type}`
+     * wants **`sale`**, singular; the response body says `Sales`, title case.
+     * One "transaction type" constant cannot serve all three, so the token is
+     * looked up per operation.
+     */
+    const TOKENS = Object.freeze({
+      TXN_CREATE: { salesorder: 'sales', purchaseorder: 'purchase' },
+      TXN_UPDATE: { salesorder: 'sales', purchaseorder: 'purchase' },
+      TXN_VOID: { salesorder: 'sales', purchaseorder: 'purchase' },
+      TXN_LIST: { salesorder: 'sale', purchaseorder: 'purchase' }   // ← sale
+    });
+
+    /**
+     * The transaction body fields. The same seven-field bundle every
+     * synchronized record carries, plus what Concept 1 forces — a transaction
+     * and a shipment are two objects with two identifiers.
+     *
+     * NOTE: `requestUuid` is a convenience copy of the LATEST inbound call's
+     * identifier. The duplicate guard is the NATIVE externalId and is never
+     * written from here. §5.2.1.
+     */
+    const TXN = Object.freeze({
+      uuid: 'custbody_jj_rb_uuid', payload: 'custbody_jj_rb_payload',
+      synced: 'custbody_jj_rb_synced', lastSync: 'custbody_jj_rb_last_sync',
+      lastTry: 'custbody_jj_rb_last_try',
+      tryResult: 'custbody_jj_rb_try_result', error: 'custbody_jj_rb_error',
+      shipmentUuid: 'custbody_jj_rb_shipment_uuid',
+      requestUuid: 'custbody_jj_rb_request_uuid',
+      scanSession: 'custbody_jj_rb_scan_session',
+      origin: 'custbody_jj_rb_origin',
+      allSerial: 'custbody_jj_rb_all_serial',
+      containsNonSerial: 'custbody_jj_rb_contains_nonserial'
+    });
+
+    /** The transaction column fields. The line filter has to be visible on the line. */
+    const LINE = Object.freeze({
+      // SOURCED from the item (Source List = Item, Source From = TrackTrace
+      // Eligibility). Nothing writes it; NetSuite fills it when the item is
+      // chosen. It is what lets a user, a saved search and the reconciliation
+      // page tell a sync-required line from a non-sync-required one with no
+      // script at all — and it saves the classification a search per save.
+      itemEligible: 'custcol_jj_rb_item_eligible',
+      serialized: 'custcol_jj_rb_serialized',
+      productUuid: 'custcol_jj_rb_product_uuid',
+      qtySynced: 'custcol_jj_rb_qty_synced'
+    });
+
+    /**
+     * The item field the sourced column above is wired to, fixed in the OBJECT.
+     *
+     * The Eligibility Field ID on the configuration lets a client point
+     * eligibility at their own item field. Sourcing cannot follow that — the
+     * source is part of the field definition — so the sourced column is trusted
+     * only while the configured id is still this one. Anything else falls back
+     * to reading the configured field. §5.3.
+     */
+    const SOURCED_ELIG_FIELD = 'custitem_jj_rb_eligible';
+
+    /**
+     * The base unit is ALWAYS Each — proposal v4 §5.2. A constant, not a
+     * switch: v1.0 had a "convert to lowest unit" configuration value and it
+     * was deleted when the proposal settled the question.
+     */
+    const BASE_UNIT = 'EACH';
+
+    /** What NetSuite calls an order that is where the transaction becomes real. */
+    const ORIGIN_NS = 'NETSUITE';
 
     /**
      * THE DISPATCH TABLE.
@@ -395,6 +617,130 @@ define(['N/search'],
       };
     }
 
+    /**
+     * THE TRANSACTION DISPATCH TABLE. §6.4.
+     *
+     * The same shape as MASTER, and for the same reason: adding a transaction
+     * type is one entry here plus one builder in jj_rb_txn.js. Nothing else.
+     *
+     * `implemented:false` rows are declared so the shape is fixed and the
+     * extension point is obvious. Deploying the User Event to one of them
+     * stamps `Failed - before API call` LOUDLY rather than doing nothing.
+     *
+     * PHASE 1, OUTBOUND ONLY. Item Fulfilment and Item Receipt are created
+     * INBOUND, by the Middleware calling the RESTlet, so they have no entry
+     * here at all — an outbound dispatch row for them would be a push path the
+     * standard flow does not have (§10.1, §11.1).
+     */
+    const TXNMAP = Object.freeze({
+
+      salesorder: txnEntry({
+        recordType: 'salesorder', key: 'SO', syncType: SYNCTYPE.SALES_ORDER, builder: 'salesTxn',
+        implemented: true, phase: 1,
+        // The customer. Its trading-partner UUID is what the payload names.
+        partnerType: 'CUSTOMER', entityField: 'entity',
+        // §8.4 — always sent explicitly on a SALES transaction, never inferred
+        // from the trading partner's default. Ignored on a purchase.
+        subType: 'SALES',
+        // §8.2 — NetSuite's status for an approved order awaiting picking.
+        // The value actually tested comes from the configuration; this is the
+        // default that seeds it.
+        // WHEN IT MAY BE SENT: any status marked sync:true in TXN_STATUS for
+        // this record type — Pending Fulfillment onwards. Nothing is named
+        // here, so nothing can drift out of step with that table.
+        flow: { enabled: 'soEnabled' },
+        // §9.3 — on a SALE the partner supplies billing and ship-to, the
+        // location supplies ship-from and sold-by.
+        addressRoles: {
+          billing: 'PARTNER', shipTo: 'PARTNER',
+          shipFrom: 'LOCATION', soldBy: 'LOCATION'
+        }
+      }),
+
+      purchaseorder: txnEntry({
+        recordType: 'purchaseorder', key: 'PO', syncType: SYNCTYPE.PURCHASE_ORDER, builder: 'purchaseTxn',
+        implemented: true, phase: 1,
+        partnerType: 'VENDOR', entityField: 'entity',
+        // §9.3 — the sub-type is IGNORED on a purchase transaction. Not sent.
+        subType: null,
+        // §9.2 — the most consequential gate in the SuiteApp: below it the
+        // order carries no transaction identifier, so the goods against it
+        // cannot be scanned at all.
+        // Pending Receipt onwards — TXN_STATUS.purchaseorder.
+        flow: { enabled: 'poEnabled' },
+        // §9.3 — REVERSED against a sale.
+        addressRoles: {
+          billing: 'LOCATION', shipTo: 'LOCATION',
+          shipFrom: 'PARTNER', soldBy: 'PARTNER'
+        }
+      }),
+
+      // ── Declared, not built in this phase. One builder each and they light
+      //    up. Every one of them is Phase 2 in the guide except the two
+      //    inbound types, which are not outbound work at all. ──────────────
+      transferorder: txnEntry({
+        recordType: 'transferorder', key: 'TO', syncType: SYNCTYPE.SALES_ORDER, builder: 'transferTxn',
+        implemented: false, phase: 2, partnerType: null, entityField: null,
+        subType: 'TRANSFER',
+        flow: { enabled: 'toEnabled' },
+        addressRoles: null
+      }),
+      returnauthorization: txnEntry({
+        recordType: 'returnauthorization', key: 'RMA', syncType: SYNCTYPE.SALES_ORDER, builder: 'rmaTxn',
+        implemented: false, phase: 2, partnerType: 'CUSTOMER', entityField: 'entity',
+        subType: 'RETURN',
+        flow: { enabled: null },
+        addressRoles: null
+      }),
+      vendorreturnauthorization: txnEntry({
+        recordType: 'vendorreturnauthorization', key: 'VRA', syncType: SYNCTYPE.PURCHASE_ORDER, builder: 'vendorReturnTxn',
+        implemented: false, phase: 2, partnerType: 'VENDOR', entityField: 'entity',
+        subType: 'RETURN',
+        flow: { enabled: null },
+        addressRoles: null
+      })
+
+      // NO inventoryadjustment ENTRY. Direct inventory adjustment is out of
+      // scope — §1.5.3. Do not add one.
+      //
+      // NO itemfulfillment / itemreceipt ENTRY. They are created inbound by
+      // the Middleware — §2.2, §10.2, §11.1.
+    });
+
+    /**
+     * Every transaction entry shares one shape, so the parts that never differ
+     * are written once. The caller supplies only what IS different.
+     */
+    function txnEntry(o) {
+      return {
+        key: o.key, syncType: o.syncType, builder: o.builder,
+        implemented: o.implemented, phase: o.phase,
+        partnerType: o.partnerType, entityField: o.entityField,
+        subType: o.subType,
+        // The platform's status rows for this record type. A Phase 2 row that
+        // NetSuite has no table for gets null, and reads as "never eligible"
+        // — which never bites, because an unbuilt row fails loudly first.
+        statuses: TXN_STATUS[o.recordType] || null,
+        flow: o.flow, addressRoles: o.addressRoles,
+        // Concept 3 — every outbound order filters its lines.
+        filtersLines: true,
+        // The Sync Log's link back to the order. The subject block's other
+        // links are all master data; without this one a work item cannot be
+        // opened from the order it is about (§5.4.2).
+        logSubjectField: LOG.transaction,
+        // The seven-field bundle, under the ids the engine's write-back and
+        // stamping already expect.
+        fields: TXN,
+        lineFields: LINE,
+        // An order is one object, so it is one unit and one call. There is no
+        // per-row fan-out as there is for an Item.
+        featureFlag: null, hasChildren: null, parentField: null,
+        endpoints: {
+          create: EP.TXN_CREATE, update: EP.TXN_UPDATE, remove: EP.TXN_VOID
+        }
+      };
+    }
+
     /** Address subrecord fields — children of an entity or a location. §10.5. */
     const ADDR = Object.freeze({
       uuid: 'custrecord_jj_rb_addr_uuid', sgln: 'custrecord_jj_rb_addr_sgln',
@@ -436,13 +782,31 @@ define(['N/search'],
       'custrecord_jj_rb_uom_error',
       'custrecord_jj_rb_uom_last_try', 'custrecord_jj_rb_uom_try_result',
       'custrecord_jj_rb_addr_uuid', 'custrecord_jj_rb_addr_payload',
-      'custrecord_jj_rb_addr_error'
+      'custrecord_jj_rb_addr_error',
+      // ── transactions. §6.5.
+      'custbody_jj_rb_uuid', 'custbody_jj_rb_payload', 'custbody_jj_rb_synced',
+      'custbody_jj_rb_last_sync', 'custbody_jj_rb_last_try',
+      'custbody_jj_rb_try_result', 'custbody_jj_rb_error',
+      'custbody_jj_rb_shipment_uuid', 'custbody_jj_rb_request_uuid',
+      'custcol_jj_rb_product_uuid', 'custcol_jj_rb_qty_synced'
+      //
+      // DELIBERATELY ABSENT, and this is not an oversight:
+      //   custbody_jj_rb_all_serial
+      //   custbody_jj_rb_contains_nonserial
+      //   custcol_jj_rb_serialized
+      // They are recomputed from the lines in beforeSubmit, so a change to one
+      // of them IS a change to the order's classification and must re-trigger
+      // the sync. Listing them here would make an item becoming eligible
+      // invisible to the engine. §6.5.
     ]);
 
     const C = Object.freeze({
       REC, CFG, LOG, LIST, EP, MASTER, ADDR, SYNC_CONTROL_FIELDS,
       STATUS, OPEN_STATUSES, ROLE, TRY, OUTCOME, ERRCLASS, TRIGGER,
-      DIRECTION, SYNCTYPE, OPERATION, REASON
+      DIRECTION, SYNCTYPE, OPERATION, REASON,
+      // transactions
+      TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
+      TXN_STATUS, SOURCED_ELIG_FIELD
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -538,7 +902,14 @@ define(['N/search'],
      * The identity is not part of what is being compared. What is compared is
      * the DATA.
      */
-    const COMPARE_IGNORE = Object.freeze(['custom_uuid']);
+    const COMPARE_IGNORE = Object.freeze([
+      'custom_uuid',
+      // The transaction payload's identity key. Exactly the same argument:
+      // empty on the create, the destination's identifier afterwards, and the
+      // ORDER has not changed — so comparing it would fire an update on the
+      // save that follows every first sync.
+      'transaction_uuid'
+    ]);
 
     /**
      * The canonical string used for CHANGE DETECTION. Same renderer as
@@ -612,6 +983,7 @@ define(['N/search'],
     };
 
     const util = {
+      normStatus, statusEntry, syncStatusNames,
       uuid, canonical, canonicalCompare, COMPARE_IGNORE,
       samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
       clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged
@@ -760,6 +1132,10 @@ define(['N/search'],
           row.useAddress = util.truthy(row.useAddress);
           row.syncInactive = util.truthy(row.syncInactive);
           row.allowNonprod = util.truthy(row.allowNonprod);
+          // Transaction flow flags. Checkboxes, so the same normalisation —
+          // a raw 'F' is truthy as a string and would enable a disabled flow.
+          row.soEnabled = util.truthy(row.soEnabled);
+          row.poEnabled = util.truthy(row.poEnabled);
           row.envLabel = row.envLabelText || 'PRODUCTION';
           row.contentType = row.contentTypeText || 'application/x-www-form-urlencoded';
           // TEXT field, not a list: getText() returns null for a free-form
@@ -787,7 +1163,33 @@ define(['N/search'],
 
     const invalidate = () => { CFG_CACHE = null; CFG_READ = false; lists.invalidate(); };
 
-    const config = { get, invalidate };
+    /**
+     * The per-flow settings for one transaction entry. Guide v3.1 §4.3.1.
+     *
+     * The guide reads these off a child record with one row per flow. This
+     * build holds them on the configuration row itself (see CFG above), and
+     * this function is the whole difference — every caller asks `config.flow`
+     * and none of them knows where the values live.
+     *
+     * WHAT IS NOT HERE, DELIBERATELY: a status gate and an approval mode.
+     * Whether an order may be sent is decided by NetSuite's own status
+     * (TXN_STATUS above), which is not something an account configures and not
+     * something that can be left blank or typed wrongly. All that remains per
+     * flow is whether it runs at all.
+     *
+     * @returns {{enabled:boolean}|null}
+     *          null when the entry declares no flow key at all, which is how
+     *          an unbuilt Phase 2 row reads as "not configured" rather than as
+     *          "enabled".
+     */
+    const flow = (entry) => {
+      const cfg = get();
+      if (!cfg || !entry || !entry.flow) return null;
+      const k = entry.flow;
+      return { enabled: k.enabled ? cfg[k.enabled] === true : false };
+    };
+
+    const config = { get, invalidate, flow };
 
     return { C, util, lists, config };
   });
