@@ -265,9 +265,12 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     };
 
     /** Subject block — written on every record, main and child alike. */
-    const subjectValues = (entry, unit, cfg, operation) => {
+    const subjectValues = (entry, unit, cfg, operation, direction) => {
       const v = {};
-      v[L.direction] = lid(C.LIST.direction, C.DIRECTION.OUTBOUND);
+      // Outbound unless a caller says otherwise. The INBOUND path is the
+      // Middleware calling NetSuite (§2.4 directions 2 and 3): the same log
+      // record, the same subject block, one value different.
+      v[L.direction] = lid(C.LIST.direction, direction || C.DIRECTION.OUTBOUND);
       v[L.type] = lid(C.LIST.syncType, entry.syncType);
       v[L.operation] = lid(C.LIST.operation, operation || C.OPERATION.UPDATE);
       v[L.recType] = String(unit.recordType);
@@ -876,6 +879,103 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     };
 
     /**
+     * ONE Sync Log record for one INBOUND call — the Middleware called
+     * NetSuite and NetSuite answered. §2.4 directions 2 and 3, §4.1.
+     *
+     * Why this is not `openCall` + `closeCall`: those two exist because an
+     * OUTBOUND call has a gap between sending and hearing back, and a row has
+     * to exist in the gap in case nothing comes back. An inbound call has no
+     * gap — by the time this runs the work is already done or already refused —
+     * so it is one write, and a row is never left half-open.
+     *
+     * The rule that nothing outside this file creates a Sync Log row still
+     * holds; this is the inbound half of that rule.
+     */
+    const recordInbound = (o) => {
+      const { entry, unit, cfg } = o;
+      const ok = o.outcome === C.OUTCOME.SUCCESS;
+      const status = o.status || (ok ? C.STATUS.CLOSED_SUCCESS : C.STATUS.OPEN_REVIEW);
+      const isOpen = String(status).indexOf('Open') === 0;
+      try {
+        const rec = record.create({ type: C.REC.LOG });
+        // The DIRECTION is the caller's, not a constant. A write lands under
+        // `Inbound (MW - NS)`; a READ lands under `Inbound Query (MW - NS
+        // read)` and that one filter is what keeps a polling scanner out of
+        // every worklist — Master Data Design v1.1 §11.12.
+        const v = subjectValues(entry, unit, cfg, o.operation || C.OPERATION.CREATE,
+          o.direction || C.DIRECTION.INBOUND);
+
+        v[L.ref] = makeRef(entry, unit);
+        v[L.correlation] = o.correlation || util.uuid();
+        v[L.role] = lid(C.LIST.logRole, C.ROLE.PARENT);
+        v[L.attemptNo] = 1;
+        v[L.attempts] = 1;
+        v[L.trigger] = lid(C.LIST.trigger, o.trigger || C.TRIGGER.INBOUND_CALL);
+        v[L.status] = lid(C.LIST.syncStatus, status);
+        v[L.outcome] = lid(C.LIST.outcome, o.outcome || C.OUTCOME.FAILURE);
+        v[L.open] = isOpen;
+        v[L.success] = ok;
+        v[L.started] = o.startedAt ? new Date(o.startedAt) : new Date();
+        v[L.completed] = new Date();
+        v[L.duration] = o.startedAt ? (Date.now() - o.startedAt) : 0;
+        v[L.firstAt] = new Date();
+        v[L.lastAt] = new Date();
+        v[L.context] = String(runtime.executionContext);
+        v[L.user] = runtime.getCurrentUser().id;
+        v[L.endpoint] = util.clip(o.endpoint || '', 300);
+        v[L.method] = lid(C.LIST.httpMethod, o.method || 'POST');
+        v[L.httpStatus] = o.httpStatus !== undefined ? o.httpStatus : (ok ? 200 : 400);
+
+        // THE duplicate guard's key, and the one identifier that matters on
+        // this path. It is a convenience copy here; the enforced one is the
+        // record's own native externalId — §4.1.2.
+        if (o.requestUuid) v[L.requestUuid] = o.requestUuid;
+        if (o.shipmentUuid) v[L.shipmentUuid] = o.shipmentUuid;
+        if (o.lineTotal !== undefined) v[L.lineTotal] = o.lineTotal;
+        if (o.lineSent !== undefined) v[L.lineSent] = o.lineSent;
+
+        if (capturing(cfg, 'request')) v[L.request] = captureBody(o.request, cfg);
+        if (o.response !== undefined && (capturing(cfg, 'response') || !ok))
+          v[L.response] = util.clip(
+            typeof o.response === 'string' ? o.response : util.canonical(o.response),
+            Number(cfg && cfg.payloadCap) || 4000);
+        if (o.payload) v[L.payload] = util.clip(o.payload, 100000);
+
+        if (o.errorClass) v[L.errorClass] = lid(C.LIST.errorClass, o.errorClass);
+        if (o.errorCode) v[L.errorCode] = util.clip(o.errorCode, 60);
+        if (o.errorMessage) v[L.error] = util.clip(o.errorMessage, 3900);
+        if (o.suggested) v[L.suggested] = util.clip(o.suggested, 3900);
+        if (o.reason) v[L.reason] = lid(C.LIST.reconReason, o.reason);
+        if (o.uuid) v[L.uuid] = o.uuid;
+
+        v[L.reconStatus] = lid(C.LIST.reconStatus, isOpen ? 'Open' : 'Resolved');
+        if (!isOpen) v[L.resolvedOn] = new Date();
+        v[L.units] = remainingUnits();
+
+        Object.keys(v).forEach((f) => {
+          if (v[f] !== null && v[f] !== undefined) {
+            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+          }
+        });
+        const id = rec.save({ ignoreMandatoryFields: true });
+        log.debug({
+          title: 'RB recordInbound ' + id,
+          details: {
+            operation: o.operation, outcome: o.outcome, status: status,
+            recordType: unit && unit.recordType, recordId: unit && unit.recordId,
+            requestUuid: o.requestUuid || null, errorCode: o.errorCode || null
+          }
+        });
+        return id;
+      } catch (e) {
+        // The record may already have been created. Losing the log row must
+        // not lose the record, so this never throws.
+        log.error({ title: 'RB recordInbound', details: e });
+        return null;
+      }
+    };
+
+    /**
      * §11.5 — the evaluation stamp. Called on EVERY path out of the engine,
      * including the ones that make no API call. One submitFields, always last.
      *
@@ -1352,7 +1452,8 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       resolveLogTarget, openCall, closeCall, closeSuccess, closeFailure,
       openDeferred, stampTry, exception, mergeDuplicates, lastSuccess,
       findOpenMain, closeStaleWorkItem, closeNoAction, parkUnsent,
-      syncedUnitUuids, syncedAddresses, recordNoCall, closeNeedsReview
+      syncedUnitUuids, syncedAddresses, recordNoCall, closeNeedsReview,
+      recordInbound
     };
 
     // ═══════════════════════════════════════════════════════════════════════════

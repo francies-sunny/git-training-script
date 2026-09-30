@@ -26,7 +26,12 @@ define(['N/search'],
       CONFIG: 'customrecord_jj_rb_config',
       LOG: 'customrecord_jj_rb_sync_log',   // main AND child — one record type
       UOM: 'customrecord_jj_rb_uom_detail',
-      DOSAGE: 'customrecord_jj_rb_dosage_form'
+      DOSAGE: 'customrecord_jj_rb_dosage_form',
+      // Not a record type — a CUSTOM LIST, and it is here because the read
+      // RESTlet serves it to the mobile app (§7.8.1, 7 Sep Q1). A custom list
+      // is searchable by its script id exactly like a record type, which is
+      // what `lists.id()` has always relied on.
+      FULFIL_EXCEPTION: 'customlist_jj_rb_fulfil_exception'
     });
 
     const CFG = Object.freeze({
@@ -73,6 +78,12 @@ define(['N/search'],
       //    so deploy the configuration record with the code.
       soEnabled: 'custrecord_jj_rb_cf_so_enabled',
       poEnabled: 'custrecord_jj_rb_cf_po_enabled',
+      // ── INBOUND. The Middleware calls NetSuite and NetSuite creates the
+      //    record — §2.2, §10.2, §11.1. All four fields already existed.
+      irEnabled: 'custrecord_jj_rb_cf_ir_enabled',
+      ifEnabled: 'custrecord_jj_rb_cf_if_enabled',
+      ifStatus: 'custrecord_jj_rb_cf_if_status',
+      defaultBin: 'custrecord_jj_rb_cf_default_bin',
       // What a NetSuite close or cancel does to the destination transaction.
       // MARK_CLOSED · DELETE · NONE — §12.3.
       closeAction: 'custrecord_jj_rb_cf_close_action'
@@ -187,7 +198,10 @@ define(['N/search'],
       // ── transactions. Guide v3.1 §3.2. Neither is an error: on a busy day
       //    they are the two most common stamps in the account.
       DEFER_APPROVAL: 'Deferred - awaiting approval',
-      SKIP_NO_SERIAL: 'Skipped - no serialized lines'
+      SKIP_NO_SERIAL: 'Skipped - no serialized lines',
+      // ── inbound. §11.4 — the record exists and the second call of the
+      //    two-call protocol has not arrived. A legitimate state, not a fault.
+      CREATED_NO_UUID: 'Created - awaiting TrackTrace identifier'
     });
 
     const OUTCOME = Object.freeze({
@@ -202,15 +216,32 @@ define(['N/search'],
       RECON: 'Reconciliation Sweep', PRESYNC: 'Dependency Pre-sync',
       // The work item exists because a STATUS moved, not because field data
       // changed — in Phase 1 that means an order reaching its gate. §7.3.1.
-      STATUS: 'Status Change'
+      STATUS: 'Status Change',
+      // The work item exists because THE MIDDLEWARE CALLED NETSUITE —
+      // directions 2 and 3 of Concept 4. §3.2.
+      INBOUND_CALL: 'Inbound Call'
     });
     const DIRECTION = Object.freeze({
-      OUTBOUND: 'Outbound (NS - MW)', INBOUND: 'Inbound (MW - NS)', INTERNAL: 'Internal'
+      OUTBOUND: 'Outbound (NS - MW)', INBOUND: 'Inbound (MW - NS)', INTERNAL: 'Internal',
+      // ── READS. A scanning operator browsing orders and bins calls NetSuite
+      //    exactly as often as a synchronization does and means nothing like
+      //    the same thing. Under this direction a polling device can be cut
+      //    out of every worklist with one filter — Master Data Design v1.1
+      //    §11.12, Transaction Guide v3.1 §7.8.1.
+      INBOUND_QUERY: 'Inbound Query (MW - NS read)'
     });
     const SYNCTYPE = Object.freeze({
       ITEM: 'Item', DOSAGE_FORM: 'Dosage Form', CUSTOMER: 'Customer', VENDOR: 'Vendor',
       ADDRESS: 'Address', LOCATION: 'Location', BIN: 'Bin', RECONCILIATION: 'Reconciliation',
-      SALES_ORDER: 'Sales Order', PURCHASE_ORDER: 'Purchase Order'
+      SALES_ORDER: 'Sales Order', PURCHASE_ORDER: 'Purchase Order',
+      ITEM_RECEIPT: 'Item Receipt', ITEM_FULFILMENT: 'Item Fulfilment',
+      // ── READS. Both values were seeded in customlist_jj_rb_sync_type from
+      //    the first build and had no code behind them until the read RESTlet.
+      //    BIN_QUERY is the Master Data guide's name (§7.14); TXN_FETCH is the
+      //    Transaction guide's (§7.8.1). Two names because a warehouse looking
+      //    for "why is that bin empty" and one looking for "why can the
+      //    operator not see that PO" are two different searches.
+      BIN_QUERY: 'Bin Query', TXN_FETCH: 'Transaction Fetch'
     });
     const OPERATION = Object.freeze({
       CREATE: 'Create', UPDATE: 'Update', DELETE: 'Delete',
@@ -336,6 +367,160 @@ define(['N/search'],
       return rows.filter((r) => r.sync).map((r) => r.name);
     };
 
+    /**
+     * NETSUITE'S OWN INBOUND SURFACE. §7.8.
+     *
+     * These are OURS — the Middleware calls them; we never call them. One
+     * value per operation, carried in the request body, because a RESTlet is
+     * one script and one URL: the operation cannot be a path segment.
+     *
+     * NO `inventory_adjustment`. Direct inventory adjustment is out of scope
+     * (§1.5.3), and reinstating it is not a small decision.
+     */
+    const INBOUND = Object.freeze({
+      // ── WRITES — jj_rl_rb_write.js, §7.8.2.
+      IR_CREATE: 'item_receipt',
+      IF_CREATE: 'item_fulfillment',
+      IDENTIFIER: 'identifier',
+
+      // ── READS — jj_rl_rb_read.js, §7.8.1. A SEPARATE SCRIPT, on purpose.
+      //    A read and a write share a body shape and nothing else: a read
+      //    creates nothing, is safe to repeat, never opens a work item and is
+      //    called orders of magnitude more often. Putting them in one file
+      //    would mean one governance budget, one deployment, one audience and
+      //    one log posture for two things that want four different ones.
+      TXN_LIST: 'list_transactions',
+      TXN_FETCH: 'fetch_transaction',
+      ALLOWED_BINS: 'allowed_bins_for_item',
+      EXC_REASONS: 'fulfilment_exceptions',
+      // The three levels of the Master Data read service, Design v1.1 §12.5.
+      // Strictly 1 -> 2 -> 3, each narrowing the last.
+      BINS_FOR_LOCATION: 'bins_for_location',
+      BIN_CONTENTS: 'bin_contents',
+      ITEM_AVAILABILITY: 'item_availability'
+
+      // STILL NOT BUILT, and absent rather than declared-and-dead:
+      //   inventory_release (§11.6)
+    });
+
+    /**
+     * LINE-LEVEL error codes. A CLOSED SET, and an EXTERNAL CONTRACT: the
+     * Middleware branches on these strings to tell an operator what to fix, so
+     * a typo here is a silent behaviour change on the other side of the
+     * integration. Tell them before you extend it. §6.1.
+     */
+    const LINE_ERR = Object.freeze({
+      ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
+      ITEM_INACTIVE: 'ITEM_INACTIVE',
+      LINE_NOT_ON_ORDER: 'LINE_NOT_ON_ORDER',
+      BAD_QUANTITY: 'BAD_QUANTITY',
+      QTY_EXCEEDS_REMAINING: 'QTY_EXCEEDS_REMAINING',
+      LOT_INVALID: 'LOT_INVALID',
+      SERIAL_INVALID: 'SERIAL_INVALID',
+      SERIAL_ALREADY_ON_HAND: 'SERIAL_ALREADY_ON_HAND',
+      BIN_NOT_ALLOWED: 'BIN_NOT_ALLOWED',
+      BIN_INVALID_LOCATION: 'BIN_INVALID_LOCATION',
+      UOM_NOT_CONVERTIBLE: 'UOM_NOT_CONVERTIBLE',
+      INVENTORY_DETAIL_MISSING: 'INVENTORY_DETAIL_MISSING',
+      INSUFFICIENT_STOCK: 'INSUFFICIENT_STOCK'          // fulfilment only
+    });
+
+    /** DOCUMENT-level error codes — a failure that is not about one line. */
+    const DOC_ERR = Object.freeze({
+      MISSING_REQUEST_UUID: 'MISSING_REQUEST_UUID',
+      UNKNOWN_OPERATION: 'UNKNOWN_OPERATION',
+      FLOW_DISABLED: 'FLOW_DISABLED',
+      NO_CONFIGURATION: 'NO_CONFIGURATION',
+      ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
+      ORDER_NOT_APPROVED: 'ORDER_NOT_APPROVED',
+      ORDER_NOT_SYNCED: 'ORDER_NOT_SYNCED',
+      ORDER_CLOSED: 'ORDER_CLOSED',
+      LOCATION_INACTIVE: 'LOCATION_INACTIVE',
+      PERIOD_LOCKED: 'PERIOD_LOCKED',
+      MALFORMED_PAYLOAD: 'MALFORMED_PAYLOAD',
+      LINE_VALIDATION_FAILED: 'LINE_VALIDATION_FAILED',
+      DUPLICATE_IDENTIFIER: 'DUPLICATE_IDENTIFIER',
+      RECORD_NOT_FOUND: 'RECORD_NOT_FOUND',
+      SAVE_REFUSED: 'SAVE_REFUSED'
+    });
+
+    /**
+     * READ error codes — jj_rl_rb_read.js. Their own set, not DOC_ERR's,
+     * because a read failure means something different to the caller: nothing
+     * was attempted, nothing is half-done, and the answer to every one of them
+     * is "ask again with better parameters", never "correct the data and
+     * resubmit". The Middleware branches on these, so the same rule as LINE_ERR
+     * applies — tell them before you extend it.
+     */
+    const READ_ERR = Object.freeze({
+      UNKNOWN_OPERATION: 'UNKNOWN_OPERATION',
+      NO_CONFIGURATION: 'NO_CONFIGURATION',
+      MALFORMED_PAYLOAD: 'MALFORMED_PAYLOAD',
+      MISSING_PARAMETER: 'MISSING_PARAMETER',
+      UNKNOWN_RECORD_TYPE: 'UNKNOWN_RECORD_TYPE',
+      NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
+      TRANSACTION_NOT_FOUND: 'TRANSACTION_NOT_FOUND',
+      TRANSACTION_NOT_SYNCED: 'TRANSACTION_NOT_SYNCED',
+      TRANSACTION_NOT_SCANNABLE: 'TRANSACTION_NOT_SCANNABLE',
+      LOCATION_NOT_FOUND: 'LOCATION_NOT_FOUND',
+      BIN_NOT_FOUND: 'BIN_NOT_FOUND',
+      ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
+      BINS_NOT_ENABLED: 'BINS_NOT_ENABLED',
+      SEARCH_FAILED: 'SEARCH_FAILED'
+    });
+
+    /**
+     * UNEXPECTED BEHAVIOUR ON A READ THAT SUCCEEDED.
+     *
+     * A clean read writes NO Sync Log row at all — a warehouse opens hundreds
+     * of scan sessions a day and a row per browse buries the rows that mean
+     * something. A row is written only when the read FAILED, or when one of
+     * these was detected: the answer was returned, and something about it
+     * needs a human to see it.
+     *
+     * They are NOT errors. The caller got its answer. They are the cases where
+     * the answer is quietly incomplete or quietly wrong, which is exactly the
+     * class of thing nobody reports and nobody finds.
+     */
+    const READ_NOTE = Object.freeze({
+      // An uncapped list filled to READ_PAGE.MAX and was cut off. The caller
+      // cannot tell truncation from "that is all there is".
+      RESULT_TRUNCATED: 'RESULT_TRUNCATED',
+      // A line was offered whose item requires serialization and whose product
+      // UUID is missing. Scanning it would fail at submit, on the dock.
+      LINES_NOT_SCANNABLE: 'LINES_NOT_SCANNABLE',
+      // The order transformed but carried no item line at all.
+      NO_SCANNABLE_LINES: 'NO_SCANNABLE_LINES',
+      // list_transactions ran with no location filter, so the operator was
+      // offered every warehouse's work. §7.8.1 requires the filter.
+      UNFILTERED_LIST: 'UNFILTERED_LIST',
+      // A sub-search failed and the read carried on with less than it should
+      // have — a configured field that is not deployed, a join the account's
+      // features do not support. The answer is thinner than it looks.
+      DEGRADED_READ: 'DEGRADED_READ'
+    });
+
+    /**
+     * The page-size ceiling on every read — Master Data Guide v3.3 §7.14.
+     * A large location must not be able to return an unbounded list, and a
+     * RESTlet that runs out of governance answers with a platform error the
+     * Middleware cannot branch on. The cap is not negotiable per call; the
+     * caller pages.
+     */
+    const READ_PAGE = Object.freeze({ MAX: 1000, DEFAULT: 200 });
+
+    /**
+     * NetSuite's Item Fulfilment `shipstatus`, from the configured label.
+     *
+     * A, B and C are not memorable and confusing A with C is the difference
+     * between staging goods and relieving inventory. Map from the readable
+     * value; never write the letter by hand. §6.1.2, §10.6.
+     */
+    const IF_STATUS = Object.freeze({ Picked: 'A', Packed: 'B', Shipped: 'C' });
+
+    /** What the inbound path writes into `custbody_jj_rb_origin`. */
+    const ORIGIN_MW = 'MIDDLEWARE';
+
     // ── Endpoints ──────────────────────────────────────────────────────────────
     const EP = Object.freeze({
       PRODUCT_CREATE: { method: 'POST', path: '/products' },
@@ -450,7 +635,12 @@ define(['N/search'],
     const LINE = Object.freeze({
       serialized: 'custcol_jj_rb_serialized',
       productUuid: 'custcol_jj_rb_product_uuid',
-      qtySynced: 'custcol_jj_rb_qty_synced'
+      qtySynced: 'custcol_jj_rb_qty_synced',
+      // ── INBOUND. Written by the RESTlet onto the receipt or the fulfilment
+      //    it creates; never by the outbound path. All three already existed.
+      excReason: 'custcol_jj_rb_exception_reason',
+      excNote: 'custcol_jj_rb_exception_note',
+      holdBin: 'custcol_jj_rb_hold_bin'
     });
 
     /**
@@ -826,7 +1016,9 @@ define(['N/search'],
       DIRECTION, SYNCTYPE, OPERATION, REASON,
       // transactions
       TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
-      TXN_STATUS
+      TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
+      // reads
+      READ_ERR, READ_NOTE, READ_PAGE
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1156,6 +1348,10 @@ define(['N/search'],
           // a raw 'F' is truthy as a string and would enable a disabled flow.
           row.soEnabled = util.truthy(row.soEnabled);
           row.poEnabled = util.truthy(row.poEnabled);
+          row.irEnabled = util.truthy(row.irEnabled);
+          row.ifEnabled = util.truthy(row.ifEnabled);
+          // A LIST field, so the label is what C.IF_STATUS is keyed on.
+          row.ifStatus = String(row.ifStatusText || row.ifStatus || '').trim();
           // Free-form text, so the *Text alias is the wrong one to read — the
           // trap inactiveMethod fell into. Blank means MARK_CLOSED: it is the
           // useful answer and the only one of the three that is not

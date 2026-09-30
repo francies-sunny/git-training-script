@@ -18,7 +18,7 @@
       <feature required="false">PAYABLES</feature>
       <feature required="true">BINMANAGEMENT</feature>
       <feature required="false">WEBSERVICES</feature>
-      <feature required="true">SERVERSIDESCRIPTING</feature>1
+      <feature required="true">SERVERSIDESCRIPTING</feature>
       <feature required="false">OPPORTUNITIES</feature>
       <feature required="false">JOBS</feature>
       <feature required="false">ADVANCEDJOBS</feature>

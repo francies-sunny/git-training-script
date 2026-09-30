@@ -1,0 +1,23 @@
+<restlet scriptid="customscript_jj_rl_rb_read">
+  <description>RapidBridge read API - the Middleware calls NetSuite on behalf of a scanning operator. Transaction list, transaction details, allowed bins for an item, fulfilment exception reasons, and the three bin/inventory levels. Read only: it creates nothing and opens no work item. Its own script so a scanning role can be given the reads without being given the ability to create an Item Receipt.</description>
+  <isinactive>F</isinactive>
+  <name>JJ RB RL Read API</name>
+  <notifyadmins>F</notifyadmins>
+  <notifyemails></notifyemails>
+  <notifyowner>T</notifyowner>
+  <notifyuser>F</notifyuser>
+  <scriptfile>[/SuiteScripts/Jobin and Jismi IT Services/RapidBridge SuiteApp/Master Scripts/jj_rl_rb_read.js]</scriptfile>
+  <scriptdeployments>
+    <scriptdeployment scriptid="customdeploy_jj_rl_rb_read">
+      <allemployees>F</allemployees>
+      <allpartners>F</allpartners>
+      <allroles>F</allroles>
+      <audslctrole></audslctrole>
+      <isdeployed>T</isdeployed>
+      <isonline>F</isonline>
+      <loglevel>DEBUG</loglevel>
+      <status>RELEASED</status>
+      <title>JJ RB RL Read API</title>
+    </scriptdeployment>
+  </scriptdeployments>
+</restlet>

@@ -60,5 +60,9 @@
       <isinactive>F</isinactive>
       <value>Skipped - no serialized lines</value>
     </customvalue>
+    <customvalue scriptid="val_created_no_uuid">
+      <isinactive>F</isinactive>
+      <value>Created - awaiting TrackTrace identifier</value>
+    </customvalue>
   </customvalues>
 </customlist>

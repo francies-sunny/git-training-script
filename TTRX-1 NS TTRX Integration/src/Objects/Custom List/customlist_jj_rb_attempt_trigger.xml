@@ -40,5 +40,9 @@
       <isinactive>F</isinactive>
       <value>Status Change</value>
     </customvalue>
+    <customvalue scriptid="val_inbound_call">
+      <isinactive>F</isinactive>
+      <value>Inbound Call</value>
+    </customvalue>
   </customvalues>
 </customlist>

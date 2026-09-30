@@ -1876,7 +1876,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
     };
 
     return {
-      run, builders, entryFor,
+      run, builders, entryFor, named,
       classifyLines, filterLines, resolveProducts, atSyncStatus,
       lockSyncFields, clearAllSyncFields,
       needsClose, runClose, runDelete,
