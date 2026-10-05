@@ -15,8 +15,8 @@
  *
  * Master Data Developer Guide v3.4 §6, §7.5.
  */
-define(['N/search'],
-  (search) => {
+define(['N/search', 'N/record'],
+  (search, record) => {
 
     // ═══════════════════════════════════════════════════════════════════════════
     // namespace 1: C — every id in the SuiteApp
@@ -295,10 +295,10 @@ define(['N/search'],
     const TXN_STATUS = Object.freeze({
       salesorder: Object.freeze([
         { id: 11, ref: 'SalesOrd:A', key: 'pendingApproval', name: 'Pending Approval', sync: false },
-        { id: 12, ref: 'SalesOrd:B', key: 'pendingFulfillment', name: 'Pending Fulfillment', sync: true },
+        { id: 12, ref: 'SalesOrd:B', key: 'pendingFulfillment', name: 'Pending Fulfillment', sync: true, scannable: true },
         { id: 13, ref: 'SalesOrd:C', key: 'cancelled', name: 'Cancelled', sync: false, terminal: true },
-        { id: 14, ref: 'SalesOrd:D', key: 'partiallyFulfilled', name: 'Partially Fulfilled', sync: true },
-        { id: 15, ref: 'SalesOrd:E', key: 'pendingBillingPartFulfilled', name: 'Pending Billing/Partially Fulfilled', sync: true },
+        { id: 14, ref: 'SalesOrd:D', key: 'partiallyFulfilled', name: 'Partially Fulfilled', sync: true, scannable: true },
+        { id: 15, ref: 'SalesOrd:E', key: 'pendingBillingPartFulfilled', name: 'Pending Billing/Partially Fulfilled', sync: true, scannable: true },
         { id: 16, ref: 'SalesOrd:F', key: 'pendingBilling', name: 'Pending Billing', sync: true },
         { id: 17, ref: 'SalesOrd:G', key: 'billed', name: 'Billed', sync: true },
         { id: 18, ref: 'SalesOrd:H', key: 'closed', name: 'Closed', sync: false, terminal: true },
@@ -306,10 +306,10 @@ define(['N/search'],
       ]),
       purchaseorder: Object.freeze([
         { id: 53, ref: 'PurchOrd:A', key: 'pendingSupervisorApproval', name: 'Pending Supervisor Approval', sync: false },
-        { id: 54, ref: 'PurchOrd:B', key: 'pendingReceipt', name: 'Pending Receipt', sync: true },
+        { id: 54, ref: 'PurchOrd:B', key: 'pendingReceipt', name: 'Pending Receipt', sync: true, scannable: true },
         { id: 55, ref: 'PurchOrd:C', key: 'rejectedBySupervisor', name: 'Rejected by Supervisor', sync: false, terminal: true },
-        { id: 56, ref: 'PurchOrd:D', key: 'partiallyReceived', name: 'Partially Received', sync: true },
-        { id: 57, ref: 'PurchOrd:E', key: 'pendingBillingPartReceived', name: 'Pending Billing/Partially Received', sync: true },
+        { id: 56, ref: 'PurchOrd:D', key: 'partiallyReceived', name: 'Partially Received', sync: true, scannable: true },
+        { id: 57, ref: 'PurchOrd:E', key: 'pendingBillingPartReceived', name: 'Pending Billing/Partially Received', sync: true, scannable: true },
         { id: 58, ref: 'PurchOrd:F', key: 'pendingBill', name: 'Pending Bill', sync: true },
         { id: 59, ref: 'PurchOrd:G', key: 'fullyBilled', name: 'Fully Billed', sync: true },
         { id: 60, ref: 'PurchOrd:H', key: 'closed', name: 'Closed', sync: false, terminal: true },
@@ -361,10 +361,46 @@ define(['N/search'],
       return null;
     };
 
-    /** The names of the statuses an order of this type may be sent in. */
+    /** The names of the statuses an order of this type may be SENT in. */
     const syncStatusNames = (recordType) => {
       const rows = TXN_STATUS[String(recordType || '').toLowerCase()] || [];
       return rows.filter((r) => r.sync).map((r) => r.name);
+    };
+
+    /**
+     * The statuses an order may be SCANNED in — a strict subset of `sync`.
+     *
+     * ── WHY THESE ARE TWO DIFFERENT QUESTIONS ──────────────────────────────
+     *
+     * `sync`      may this order's payload be SENT to TrackTraceRX?
+     * `scannable` has this order got anything left to receive or fulfil?
+     *
+     * A purchase order at **Pending Bill** has been fully received. Every unit
+     * is in. It is still `sync: true`, because an edit to it — a changed
+     * address, a corrected quantity — must still reach the destination, and
+     * closing that door would leave the two systems disagreeing.
+     *
+     * But it is NOT scannable. Offering it to an operator wastes a trip to the
+     * dock: there is nothing to put in a receipt, and the transform would
+     * produce an empty document.
+     *
+     * The same split on a sale. **Pending Billing** means fully fulfilled and
+     * awaiting an invoice; **Billed** means finished. Neither has stock left to
+     * pick.
+     *
+     * THE PARTIAL STATUSES STAY IN. `Pending Billing/Partially Received` and
+     * `Pending Billing/Partially Fulfilled` both mean *some* of it has been
+     * billed and *some* is still outstanding — the billing half is noise to a
+     * warehouse, and dropping them would hide genuinely open work.
+     *
+     *   PO scannable: Pending Receipt · Partially Received ·
+     *                 Pending Billing/Partially Received
+     *   SO scannable: Pending Fulfillment · Partially Fulfilled ·
+     *                 Pending Billing/Partially Fulfilled
+     */
+    const scannableStatusNames = (recordType) => {
+      const rows = TXN_STATUS[String(recordType || '').toLowerCase()] || [];
+      return rows.filter((r) => r.scannable).map((r) => r.name);
     };
 
     /**
@@ -452,6 +488,33 @@ define(['N/search'],
      * resubmit". The Middleware branches on these, so the same rule as LINE_ERR
      * applies — tell them before you extend it.
      */
+    /**
+     * ══ WHEN A SYNC LOG ROW MAY BE CREATED ═════════════════════════════════
+     *
+     * FOUR REASONS, AND NOTHING ELSE:
+     *
+     *   1. CALL        an API call was made, or was about to be and was
+     *                  suppressed (kill switch, dry run, environment gate).
+     *   2. ERROR       something failed, expected or not.
+     *   3. ACTION      a person must do something before this can proceed.
+     *   4. NOTICE      something must be said that the NetSuite record itself
+     *                  cannot carry - which in practice means the record is
+     *                  gone, so there is nothing left to stamp.
+     *
+     * ROUTINE PROCESSING WRITES NOTHING. No change, feature disabled, not
+     * eligible, nothing to do: those are stamped on the RECORD's own Last Sync
+     * Try fields by `stampTry`, which creates no row. A warehouse that saves
+     * two thousand items a day must not produce two thousand log rows saying
+     * nothing happened - the rows that matter drown.
+     *
+     * This is enforced, not merely documented: `recordNoCall` refuses to write
+     * a CLOSED row that carries no error and asks nothing of anyone. See the
+     * guard there.
+     */
+    const LOG_REASON = Object.freeze({
+      CALL: 'Call', ERROR: 'Error', ACTION: 'Action', NOTICE: 'Notice'
+    });
+
     const READ_ERR = Object.freeze({
       UNKNOWN_OPERATION: 'UNKNOWN_OPERATION',
       NO_CONFIGURATION: 'NO_CONFIGURATION',
@@ -499,6 +562,36 @@ define(['N/search'],
       // features do not support. The answer is thinner than it looks.
       DEGRADED_READ: 'DEGRADED_READ'
     });
+
+    /**
+     * READ REFUSALS THAT ARE EXPECTED, AND THEREFORE WRITE NO SYNC LOG ROW.
+     *
+     * A caller asking for a purchase order that does not exist, or one that was
+     * never sent to TrackTraceRX, has not found a defect — it has found out
+     * something, which is what a read is for. The answer is the product, and
+     * the next call will carry better parameters.
+     *
+     * Logging these would put every mistyped id and every stale cache entry on
+     * the reconciliation page, which is the opposite of what that page is for.
+     *
+     * WHAT IS *NOT* HERE, and therefore still writes a row:
+     *
+     *   NO_CONFIGURATION   the account is misconfigured. Nothing inbound works
+     *                      until somebody fixes it — C.LOG_REASON ACTION
+     *   SEARCH_FAILED      NetSuite refused a search this script asked for.
+     *                      That is a defect in the SuiteApp or in the account's
+     *                      field setup — C.LOG_REASON ERROR
+     *   anything unhandled a bug, by definition
+     *
+     * Plus C.READ_NOTE: unexpected behaviour on an answer that SUCCEEDED, which
+     * is the whole reason that set exists.
+     */
+    const READ_EXPECTED = Object.freeze([
+      'UNKNOWN_OPERATION', 'MALFORMED_PAYLOAD', 'MISSING_PARAMETER',
+      'UNKNOWN_RECORD_TYPE', 'NOT_IMPLEMENTED',
+      'TRANSACTION_NOT_FOUND', 'TRANSACTION_NOT_SYNCED', 'TRANSACTION_NOT_SCANNABLE',
+      'LOCATION_NOT_FOUND', 'BIN_NOT_FOUND', 'ITEM_NOT_FOUND', 'BINS_NOT_ENABLED'
+    ]);
 
     /**
      * The page-size ceiling on every read — Master Data Guide v3.3 §7.14.
@@ -603,7 +696,6 @@ define(['N/search'],
       tryResult: 'custbody_jj_rb_try_result', error: 'custbody_jj_rb_error',
       shipmentUuid: 'custbody_jj_rb_shipment_uuid',
       requestUuid: 'custbody_jj_rb_request_uuid',
-      scanSession: 'custbody_jj_rb_scan_session',
       origin: 'custbody_jj_rb_origin',
       allSerial: 'custbody_jj_rb_all_serial',
       containsNonSerial: 'custbody_jj_rb_contains_nonserial'
@@ -644,28 +736,18 @@ define(['N/search'],
     });
 
     /**
-     * NETSUITE'S UNIT ABBREVIATIONS, mapped to this SuiteApp's own saleable-unit
-     * list values.
+     * UNIT_ALIAS LIVED HERE AND IS GONE.
      *
-     * A transaction line names its unit by INTERNAL ID. Resolving that id gives
-     * a Unit Name ("Each") and an Abbreviation ("EA"), and an account may show
-     * either. `customlist_jj_rb_saleable_unit` holds seven values and nothing
-     * else, so mapping the standard abbreviation of each one is bounded and
-     * safe - it is not a guess at arbitrary text.
+     * It mapped "EA" to "EACH" and six more like it. Every one of those pairs
+     * was a guess about how an account spells its own units, hardcoded into a
+     * SuiteApp that exists to stop exactly that. An account with a unit called
+     * "Vial" or "Blister" was never in the table and never would be.
      *
-     * Tried only AFTER the unit name and the abbreviation have both failed to
-     * match a UOM Detail row, so a client who spells their units out in full
-     * never reaches it.
+     * NetSuite already knows the answer. The item names a Units Type; the Units
+     * Type lists its units with BOTH a name and an abbreviation. `units.load`
+     * reads that and does the translation from the account's own data — see
+     * below.
      */
-    const UNIT_ALIAS = Object.freeze({
-      EA: 'EACH', EACH: 'EACH', EAS: 'EACH', UNIT: 'EACH', UNITS: 'EACH',
-      CS: 'CASE', CASE: 'CASE', CASES: 'CASE',
-      PLT: 'PALLET', PAL: 'PALLET', PALLET: 'PALLET', PALLETS: 'PALLET',
-      PR: 'PAIR', PAIR: 'PAIR', PAIRS: 'PAIR',
-      BX: 'BOX', BOX: 'BOX', BOXES: 'BOX',
-      BTL: 'BOTTLE', BOT: 'BOTTLE', BOTTLE: 'BOTTLE', BOTTLES: 'BOTTLE',
-      CTN: 'CARTON', CART: 'CARTON', CARTON: 'CARTON', CARTONS: 'CARTON'
-    });
 
     /**
      * The base unit is ALWAYS Each - proposal v4 §5.2. A constant, not a
@@ -1040,9 +1122,9 @@ define(['N/search'],
       DIRECTION, SYNCTYPE, OPERATION, REASON,
       // transactions
       TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
-      TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW, UNIT_ALIAS,
+      TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
       // reads
-      READ_ERR, READ_NOTE, READ_PAGE
+      READ_ERR, READ_NOTE, READ_EXPECTED, READ_PAGE, LOG_REASON
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1219,7 +1301,7 @@ define(['N/search'],
     };
 
     const util = {
-      normStatus, statusEntry, syncStatusNames,
+      normStatus, statusEntry, syncStatusNames, scannableStatusNames,
       uuid, canonical, canonicalCompare, COMPARE_IGNORE,
       samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
       clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged
@@ -1435,7 +1517,229 @@ define(['N/search'],
       return { enabled: k.enabled ? cfg[k.enabled] === true : false };
     };
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // namespace 5: units — the account's own unit vocabulary
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * ══ WHY THIS EXISTS ═══════════════════════════════════════════════════
+     *
+     * A transaction line's `units` field reads back as an ABBREVIATION — "EA",
+     * "PLT". A UOM Detail row's Saleable Unit is a NAME — "Each", "Pallet".
+     * Comparing them never matches, and every line reports
+     * `NO_ROW: the item has no UOM Detail row for unit "EA"` against a UOM
+     * table that is perfectly correct.
+     *
+     * The earlier fix guessed, with a hardcoded abbreviation table. That is
+     * wrong in principle for a configurable SuiteApp — an account with a unit
+     * called "Vial" was never in the table — and it was wrong in practice the
+     * moment a client used their own vocabulary.
+     *
+     * NETSUITE ALREADY HOLDS THE TRANSLATION. Every item names a **Units
+     * Type**; every Units Type lists its units with a name, an abbreviation,
+     * plural forms and a conversion rate. Read that and the account tells you
+     * its own spelling.
+     *
+     * ══ GOVERNANCE ════════════════════════════════════════════════════════
+     *
+     * TWO searches for a whole document, not two per line:
+     *
+     *   1. the items  → their Units Type ids   (callers that already search
+     *                   `item` add one column instead and skip this)
+     *   2. ONE `unitstype` search over the DISTINCT type ids → every unit of
+     *      every type on the document
+     *
+     * A twelve-line order with three distinct items on one Units Type costs
+     * one search here, not twelve.
+     */
+
+    /** The item field naming its Units Type. */
+    const UNITS_TYPE_FIELD = 'unitstype';
+
+    /** itemId -> unitstype id. One search. Skip it if you already search items. */
+    const unitTypesForItems = (itemIds) => {
+      const out = {};
+      if (!itemIds || !itemIds.length) return out;
+      try {
+        search.create({
+          type: 'item',
+          filters: [['internalid', 'anyof', itemIds]],
+          columns: ['internalid', UNITS_TYPE_FIELD]
+        }).run().each((r) => {
+          out[String(r.id)] = String(r.getValue(UNITS_TYPE_FIELD) || '');
+          return true;
+        });
+      } catch (e) {
+        log.error({ title: 'RB unitTypesForItems', details: e });
+      }
+      return out;
+    };
+
+    /**
+     * Load every unit of every Units Type these items name, and return a
+     * resolver keyed by the UNIT'S OWN INTERNAL ID.
+     *
+     * ── WHY record.load AND NOT A SEARCH ───────────────────────────────────
+     *
+     * A transaction line names its unit by an INTERNAL ID — `units` reads back
+     * as `23`. That id belongs to a row in the Units Type's UOM sublist, and
+     * **a `unitstype` SEARCH cannot return it**: the search's `internalid` is
+     * the TYPE's, repeated once per unit, so there is no column that says
+     * "this row is unit 23". Searching could only ever give names and
+     * abbreviations, which is why the first attempt had to guess at spellings
+     * and why an alias table appeared to be needed.
+     *
+     * `record.load` on the Units Type exposes the sublist, and the sublist has
+     * the row id. Resolution becomes a lookup, not a comparison:
+     *
+     *     line says units = 23  →  byId['23']  →  { name: 'Pallet', rate: 16 }
+     *
+     * No normalisation, no plurals, no abbreviations, nothing hardcoded, and
+     * nothing that can mis-resolve. The spelling index below is a FALLBACK for
+     * the one case where no id is available, not the mechanism.
+     *
+     * ── GOVERNANCE ────────────────────────────────────────────────────────
+     *
+     * 10 units per DISTINCT Units Type, not per line and not per item. A
+     * twelve-line order whose items all share one Units Type costs 10.
+     */
+    const loadUnits = (itemTypes) => {
+      const typeIds = [];
+      Object.keys(itemTypes || {}).forEach((k) => {
+        const t = String(itemTypes[k] || '');
+        if (t && typeIds.indexOf(t) === -1) typeIds.push(t);
+      });
+
+      log.debug("RB loadUnits — typeIds", typeIds);
+
+      // ONE MAP PER TYPE, ONE OBJECT PER UNIT.
+      //
+      //   byType['1'] = { '23': pallet, 'PALLET': pallet, 'PF': pallet, … }
+      //
+      // The id key and the spelling keys point at the SAME object, so four
+      // units cost four objects however many ways they can be found. Ids are
+      // numeric and spellings are alphabetic, so the two cannot collide.
+      //
+      // SCOPED BY TYPE, not global. A unit id is unique across NetSuite, so a
+      // global index would happily resolve a unit belonging to a type the item
+      // does not use — which is a data error worth reporting, not papering
+      // over.
+      const byType = {};        // typeId -> { key: unit }
+      const byTypeList = {};    // typeId -> [unit]   (for messages, in order)
+      let loaded = false;
+
+      typeIds.forEach((tid) => {
+        let rec;
+        try {
+          rec = record.load({ type: 'unitstype', id: tid, isDynamic: false });
+        } catch (e) {
+          // No Multiple Units of Measure feature, or the type was deleted.
+          log.audit({
+            title: 'RB loadUnits — Units Type ' + tid + ' could not be loaded',
+            details: (e && e.message) || String(e)
+          });
+          return;
+        }
+        loaded = true;
+        byType[tid] = byType[tid] || {};
+        byTypeList[tid] = byTypeList[tid] || [];
+
+        let n = 0;
+        try { n = rec.getLineCount({ sublistId: 'uom' }); } catch (e) { n = 0; }
+
+        for (let i = 0; i < n; i++) {
+          const g = (f) => {
+            try { return rec.getSublistValue({ sublistId: 'uom', fieldId: f, line: i }); }
+            catch (e) { return ''; }
+          };
+          const name = String(g('unitname') || '');
+          if (!name) continue;
+
+          const unit = {
+            id: String(g('internalid') || ''),
+            typeId: tid,
+            name: name,
+            abbreviation: String(g('abbreviation') || ''),
+            rate: Number(g('conversionrate')) || 1,
+            isBase: truthy(g('baseunit'))
+          };
+
+          byTypeList[tid].push(unit);
+
+          // The id — what a transaction line actually carries.
+          if (unit.id) byType[tid][unit.id] = unit;
+
+          // NAME and ABBREVIATION, for a form that exposes no id. Two keys,
+          // not the five the spelling-guessing version carried. Plurals are
+          // dropped: nothing produces a plural where an id is unavailable, and
+          // an index nothing reads is one more thing to keep correct.
+          [unit.name, unit.abbreviation].forEach((sp) => {
+            const k = unitKey(sp);
+            if (k && !byType[tid][k]) byType[tid][k] = unit;
+          });
+        }
+
+        log.debug("RB loadUnits — byType", byType);
+      });
+
+      return {
+        loaded: loaded,
+
+        /**
+         * The unit this line is in.
+         *
+         * @param itemId  the line's item, used to scope the spelling fallback
+         * @param raw     the line's `units` value — an INTERNAL ID normally,
+         *                a name or abbreviation when that is all there is
+         */
+        nameFor: (itemId, raw) => {
+          const v = String(raw === null || raw === undefined ? '' : raw).trim();
+          if (!v) return null;
+          const tid = String((itemTypes || {})[String(itemId)] || '');
+          const rows = tid && byType[tid];
+          if (!rows) return null;
+
+          // 1. BY ID — what a transaction line carries. An id that is not in
+          //    THIS item's type is not a match: the line and the item disagree
+          //    about which Units Type applies, and saying so beats resolving a
+          //    unit the item does not use.
+          if (Object.prototype.hasOwnProperty.call(rows, v)) return rows[v];
+
+          // 2. By spelling, same scope. Reached only when no id was available.
+          const k = unitKey(v);
+          return (k && rows[k]) || null;
+        },
+
+        /** Every unit NAME this item's type offers. For an error message. */
+        unitsOf: (itemId) => {
+          const tid = String((itemTypes || {})[String(itemId)] || '');
+          return ((byTypeList[tid] || []).map((u) => u.name));
+        }
+      };
+    };
+
+    /**
+     * A line's unit text reduced to a comparison key.
+     *
+     * THE CONVERSION RATE IS PART OF THE DISPLAY. A line reads `Each(1)` where
+     * the UOM row reads `Each`, and comparing them raw is how every line on an
+     * order came back `Blocked - missing parent UUID`.
+     */
+    function unitKey(v) {
+      return String(v === null || v === undefined ? '' : v)
+        .replace(/\([^)]*\)/g, ' ')
+        .replace(/[^a-z0-9]/gi, '')
+        .toUpperCase();
+    }
+
+    const units = {
+      TYPE_FIELD: UNITS_TYPE_FIELD,
+      typesForItems: unitTypesForItems,
+      load: loadUnits,
+      key: unitKey
+    };
+
     const config = { get, invalidate, flow };
 
-    return { C, util, lists, config };
+    return { C, util, lists, config, units };
   });

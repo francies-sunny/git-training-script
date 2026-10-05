@@ -1196,3 +1196,414 @@ try to PUT updates to something that was never a transaction.
 **None.** No new field, no new list, no new list value. `C.UNIT_ALIAS` is a constant in the module.
 
 464 assertions across 11 suites — `t10` covers the unit ladder, `t11` the client script.
+
+---
+
+## Pass 18 — when a Sync Log row may be created
+
+`jj_rb_core.js` · `jj_rb_io.js` · `jj_rb_sync.js`.
+
+### The rule
+
+**Four admissible reasons — `C.LOG_REASON`:**
+
+| | |
+|---|---|
+| `CALL` | An API call was made, or was about to be and was suppressed (kill switch, dry run, environment gate) |
+| `ERROR` | Something failed, expected or not |
+| `ACTION` | A person must do something before this can proceed |
+| `NOTICE` | Something must be said that the NetSuite record cannot carry — in practice, the record is gone and there is nothing left to stamp |
+
+**Routine processing writes nothing.** No change, feature disabled, not eligible, nothing to do:
+those are stamped on the record's own Last Sync Try fields by `stampTry`, which creates no row at
+all. An account saving two thousand items a day must not produce two thousand rows saying nothing
+happened — the rows that matter drown in them.
+
+### What the audit found
+
+The architecture already mostly obeyed this. Every "nothing happened" path in the engine already
+went to `stampTry`, and §12.9 had already excluded one routine skip by hand. **Four functions, and
+only four, create a Sync Log row:**
+
+| | Reason | |
+|---|---|---|
+| `openCall` | CALL | One row per HTTP call, opened before it goes out |
+| `openDeferred` | ACTION | Real work, unsent, still owed. Always OPEN, and it joins an existing work item rather than minting a second for one subject |
+| `recordInbound` | CALL / ERROR | The Middleware called us. A clean READ writes nothing — Pass 16 |
+| `recordNoCall` | NOTICE | No call, no record left to stamp |
+
+All fourteen `openDeferred` sites were checked against the rule and all fourteen are admissible —
+each is either a blocked state needing a person (`Open - Needs Review`) or real work queued for the
+sweep (`Open - Pending Retry`). The `closeNoAction` and `parkUnsent` sites all follow an *attempted*
+call that was suppressed, so a row already exists and must be closed rather than left open for ever.
+
+**One violation, in the delete path.** A record deleted in NetSuite that had never been accepted
+remotely wrote a closed row saying so. No call, no error, nothing anybody must act on — and on a
+go-live that imports and then tidies up, or on any account that deletes drafts, that is one row per
+deletion recording that the integration had no opinion. It now goes to the execution log and
+nowhere else.
+
+### The rule is enforced, not merely documented
+
+`recordNoCall` is the one writer with no call behind it and no obligation to stay open, so it is the
+one place a caller can ask for a row that should not exist. It now refuses:
+
+```javascript
+if (!isOpen && !o.errorCode && !o.errorClass && !o.suggested) { … return null; }
+```
+
+An OPEN row is always admissible — open means somebody still owes the work, which is `ACTION` by
+definition. A CLOSED row must carry an error, or **say what the reader should do about it**. That
+last clause is the useful one: the difference between a notice and noise is whether anything can be
+suggested, and if nothing can be, there was nothing to say.
+
+Callers already treated the row as advisory on every path that reaches here, so returning null is
+safe. The refusal is written to the execution log with the rule that refused it, so a developer who
+expected a row finds out why there is none.
+
+### One site gained a suggestion rather than losing its row
+
+The other delete-path notice — a record deleted in NetSuite whose type has **no delete endpoint**,
+leaving a remote orphan — would have been dropped by the same guard. It should not be: a human has
+to go and remove that object. It now says so, which is what it was missing all along:
+
+> Find the object in TrackTraceRX and remove it by hand. Nothing in NetSuite points at it any more.
+
+### Objects
+
+**None.**
+
+486 assertions across 12 suites. `t12` tests the rule itself: routine refused, error written, open
+always written, a closed notice written only with a suggestion, `stampTry` creating no row, and a
+source-level assertion that exactly four functions can create one.
+
+---
+
+## Pass 19 — scan session dropped · scannable ≠ syncable · expected refusals stop logging
+
+`jj_rb_core.js` · `jj_rl_rb_read.js` · `jj_rl_rb_write.js`.
+
+### 1. `scan_session_id` removed
+
+Not required at this time. The payload key, the stamp, the `C.TXN.scanSession` entry and the field
+object all went together — a half-removal that leaves an unwritten field on the form is worse than
+either state.
+
+`custbody_jj_rb_scan_session.xml` moved to `_to_delete/`. The field is **not** referenced by any
+subtab or form object, so nothing else moves with it.
+
+A body that still sends `scan_session_id` is simply ignored. `t8` keeps sending it on purpose, to
+prove that an unknown key is harmless rather than fatal.
+
+### 2. `scannable` is a narrower set than `sync`
+
+**Two different questions, and the gap between them is the point.**
+
+| | |
+|---|---|
+| `sync` | May this order's payload be **sent** to TrackTraceRX? |
+| `scannable` | Has this order anything **left to receive or fulfil**? |
+
+A purchase order at **Pending Bill** has been fully received — every unit is in. It stays
+`sync: true`, because an edit to it (a corrected address, a changed quantity) must still reach the
+destination, and closing that door would leave the two systems disagreeing. But offering it to an
+operator wastes a trip to the dock: there is nothing to put on a receipt, and the transform would
+produce an empty document.
+
+**Fully Billed**, **Pending Billing** and **Billed** are the same case, further along.
+
+| Type | Scannable |
+|---|---|
+| Purchase Order | Pending Receipt · Partially Received · Pending Billing/Partially Received |
+| Sales Order | Pending Fulfillment · Partially Fulfilled · Pending Billing/Partially Fulfilled |
+
+**The partial statuses stay in.** `Pending Billing/Partially Received` means *some* of it is billed
+and *some* is still outstanding; the billing half is noise to a warehouse, and dropping them would
+hide genuinely open work.
+
+Applied in three places: `list_transactions` filters on it, `fetch_transaction` refuses on it, and
+the **write** RESTlet refuses `item_receipt` / `item_fulfillment` on it — so the refusal says in
+words what the transform would otherwise have failed at obscurely.
+
+The refusal message distinguishes the two cases, because they need different responses from a
+reader:
+
+> Order PO447 (16050) is "Pending Bill", which has nothing left to receive or fulfil. The statuses
+> that do are: Pending Receipt, Partially Received, Pending Billing/Partially Received. It should
+> never have been offered for selection.
+
+and on a fetch, when the order is still synchronized:
+
+> …It is still synchronized with TrackTraceRX; it simply has nothing left to receive or fulfil.
+
+**The outbound gate is untouched.** `atSyncStatus` still reads `sync`, so an edit to a billed order
+still reaches the destination. Narrowing that would have been a silent data-divergence bug, not a
+tidy-up.
+
+### 3. An expected refusal writes no Sync Log row
+
+Pass 16 stopped logging clean reads. This stops logging the refusals that are **answers rather than
+faults**.
+
+A caller asking for a purchase order that does not exist, or one that was never sent to
+TrackTraceRX, has not found a defect — it has found something out, which is what a read is for. The
+envelope *is* the answer, and the next call carries better parameters. Logging those puts every
+mistyped id and every stale cache entry on the reconciliation page, which is the opposite of what
+that page is for.
+
+**`C.READ_EXPECTED` — twelve codes, no row:**
+
+`UNKNOWN_OPERATION` · `MALFORMED_PAYLOAD` · `MISSING_PARAMETER` · `UNKNOWN_RECORD_TYPE` ·
+`NOT_IMPLEMENTED` · `TRANSACTION_NOT_FOUND` · `TRANSACTION_NOT_SYNCED` ·
+`TRANSACTION_NOT_SCANNABLE` · `LOCATION_NOT_FOUND` · `BIN_NOT_FOUND` · `ITEM_NOT_FOUND` ·
+`BINS_NOT_ENABLED`
+
+**What still writes:**
+
+| | |
+|---|---|
+| `NO_CONFIGURATION` | The account is misconfigured. Nothing inbound works until a person fixes it — `C.LOG_REASON` ACTION |
+| `SEARCH_FAILED` | NetSuite refused a search this script asked for. A defect in the SuiteApp or the account's field setup — ERROR |
+| Anything unhandled | A bug, by definition |
+| `C.READ_NOTE` | Unexpected behaviour on an answer that **succeeded** — the whole reason that set exists |
+
+Every refusal still goes to the NetSuite execution log with the rule that filtered it, so a
+developer who expected a row finds out why there is none.
+
+The dispatch order changed as a consequence: the **unknown-operation check now runs before the
+configuration check**, because an unknown operation is the caller's problem and reporting a missing
+configuration row first would blame the account for a typo.
+
+### Objects
+
+| Object | Change |
+|---|---|
+| `custbody_jj_rb_scan_session.xml` | **Moved to `_to_delete/`** |
+
+No other object touched. `scannable` and `READ_EXPECTED` are constants in the module.
+
+511 assertions across 12 suites.
+
+---
+
+## Pass 20 — the account supplies its own unit vocabulary
+
+`jj_rb_core.js` · `jj_rb_txn.js` · `jj_rl_rb_read.js` · 12 transaction body field objects.
+
+### Adopted from the development folder, unchanged
+
+| | |
+|---|---|
+| `jj_rl_rb_api.js` → **`jj_rl_rb_write.js`** | The rename and every reference to it |
+| `recordType: 'itemreceipt'` | String literals in `INBOUND_MAP` and `SCAN` instead of `record.Type.*`. **The `record` module is not loaded when those constants are evaluated**, so the enum reads `undefined` and the map keys silently become the string `"undefined"` — two rows collapsing into one. The literal is correct and it is what is kept |
+
+Device debug statements were stripped. One of them had **replaced** the line that populates `unitIds`, so unit resolution was dead on that copy — rewritten here regardless.
+
+### `UNIT_ALIAS` deleted. The item knows.
+
+Pass 17 fixed the symptom with a hardcoded abbreviation table — `EA` → `EACH`, and six more. That was
+wrong in principle for a SuiteApp whose whole purpose is to stop per-client hardcoding, and wrong in
+practice the moment an account used a unit called `Vial` or `Blister`.
+
+**It also solved the wrong problem.** The earlier `readUnits` searched `unitstype` filtered by the
+**line's** unit value. That cannot work: a `unitstype` record's internal id is the **TYPE's**, not
+the individual unit's. The search matched nothing on every call, and the alias table was quietly
+carrying the entire feature.
+
+**NetSuite already holds the translation.** Every item names a Units Type; every Units Type lists its
+units with a name, an abbreviation, both plurals and a conversion rate. `core.units` reads that:
+
+```
+item → unitstype id → that type's units → { EA, EACH, PALLET, PLT, PLTS … } → canonical NAME
+```
+
+The canonical name is then matched against UOM Detail. **One candidate, no ladder.** By the time
+`uomRowFor` runs there is nothing left to guess at — a name that does not match is a real mismatch
+between the Units Type and the UOM Detail table, and saying so is more useful than trying six more
+spellings.
+
+### Governance
+
+**Two searches per document, not two per line.**
+
+| | |
+|---|---|
+| items → their Units Type | **Zero extra searches** on both paths. `readItems` and `classifyLines` already search `item`; `unitstype` rides along as one more column |
+| the units themselves | **ONE** `unitstype` search over the **distinct** type ids |
+
+A twelve-line order with three items on one Units Type costs one search here. `t10` asserts exactly
+that: twelve lines, one `unitstype` search, at most one `item` search.
+
+`resolveProducts` loads the book **once** and reuses it across the pre-sync retry rather than
+reloading after re-reading the product map.
+
+### Two failures, and they were one before
+
+Telling them apart is the point, because the fix differs:
+
+| | Meaning | Fix |
+|---|---|---|
+| `UNIT_UNKNOWN` | The unit is not in the item's Units Type at all. **No UOM Detail row could ever match it** | Correct the Units Type |
+| `NO_ROW` | The unit resolved to a name, and UOM Detail has no row for that name | Add a UOM Detail row |
+
+The read returns both on the line; the outbound block message names the unit **as the line spells it
+and as it resolved**, because "EA did not resolve" and "Each has no UOM row" are different clues.
+
+A unit that cannot be resolved is **not** guessed around. The outbound path blocks the order
+(`Blocked — missing parent UUID`, work item open) rather than sending a product it inferred.
+
+### The same bug was in the outbound path
+
+`jj_rb_txn.js`'s `lineUnit` reads `getSublistText('units')`, which returns the abbreviation on a
+loaded record exactly as it does on a transformed one. `classifyLines` and `applyProducts` now go
+through the same resolver, so the stamped `custcol_jj_rb_product_uuid` and the payload's
+`product_uuid` agree with what `fetch_transaction` reports. They could not before.
+
+### Objects
+
+| Object | Change |
+|---|---|
+| `custtab_jj_rb_transaction` | Already present. **All 12 `custbody_jj_rb_*` fields now carry `<subtab>[scriptid=custtab_jj_rb_transaction]</subtab>`** — every one was empty, so the fields were scattered across the main form instead of grouped |
+
+No new object. `custtab_jj_rb_transaction` matches the four that already exist for entity, item,
+UOM and employee, so a transaction now reads the same way as every other record this SuiteApp
+touches.
+
+531 assertions across 12 suites. `t10` covers the resolver end to end, including an account-specific
+unit that appears in no table anywhere, and the governance assertion.
+
+---
+
+## Pass 21 — the unit is an id, and `record.load` is the only thing that knows it
+
+`jj_rb_core.js` · `jj_rb_txn.js` · `jj_rl_rb_read.js`.
+
+Pass 20 removed the hardcoded alias table and replaced it with a `unitstype` **search**. The live run
+proved the search cannot work, and the account's own console output is the proof:
+
+```
+units            Value: 23        Text: PF
+unitslist        Value: 1222324   Text: 1222324
+unitconversionrate Value: 16      Text: 16
+origunits        Value: 23        Text: 23
+```
+
+```json
+{ "line_unique_key": "1", "item": "718 (718)",
+  "reason": "UNIT_UNKNOWN: \"23\" is not a unit of this item's Units Type. It offers: Each(1), Case, Pallet, Package." }
+```
+
+The line carries **23**. The index was keyed on `EACH`, `PF`, `PALLETS` and the like. `23` was never
+going to be in it.
+
+### A `unitstype` search cannot return a unit's id
+
+| | |
+|---|---|
+| `search.create({ type: 'unitstype' })` | One result row per **unit**, but `internalid` is the **TYPE's**, repeated on every row. No column carries the unit's own id |
+| `record.load({ type: 'unitstype' })` | The `uom` **sublist**, one line per unit, and `getSublistValue('internalid')` on it **is the unit's id** |
+
+So the resolver loads the type instead of searching it. `['N/search']` became `['N/search', 'N/record']`
+in `jj_rb_core.js` for exactly this.
+
+```
+item → unitstype id → record.load → uom sublist → { id, name, abbreviation, rate, isBase }
+```
+
+Resolution is now **by id**, which is an exact match against what the line actually holds. Name and
+abbreviation remain as a fallback for a form that exposes no id — they are no longer the mechanism.
+
+### One object per unit
+
+The Pass 20 index built **eleven keys for four units** — name, abbreviation, plural name, plural
+abbreviation, each with its own copy of the unit:
+
+```
+1: { EACH:{…}, EA:{…}, CASE:{…}, CA:{…}, CASES:{…}, PALLET:{…}, PF:{…},
+     PALLETS:{…}, PACKAGE:{…}, PK:{…}, PACKAGES:{…} }
+```
+
+Now **one object per unit**, with the id key and the two spelling keys pointing at the same object:
+
+```
+1: { '23':pallet, 'PALLET':pallet, 'PF':pallet, '1':each, 'EACH':each, 'EA':each, … }
+```
+
+Plurals are gone. Nothing produces a plural anywhere an id is unavailable, and an index nothing reads
+is one more thing to keep correct. Ids are numeric and spellings are alphabetic, so the two key spaces
+cannot collide.
+
+### Scoped per type, not global
+
+A unit id is unique across the account, so a single flat id index would resolve a unit belonging to a
+Units Type the item does not use. That is a **data error worth reporting**, not something to paper
+over — the line and the item disagree about which type applies. The index is therefore one map per
+type, and `nameFor(itemId, raw)` looks only inside the type the item names. A test asserts that
+resolving unit `23` for an item whose type does not contain it returns **nothing**.
+
+### Value first, not text first
+
+```js
+const unitId  = String(sv('units') || '');
+const unitRaw = unitId || st('units') || st('unitsdisplay') || String(sv('unitsdisplay') || '');
+```
+
+Asking for the text first is what produced `"23"` in the failure message: on a **transformed** record
+`getSublistText` frequently returns nothing and the ladder fell through to the raw value by accident.
+The id is now what is asked for on purpose, and `unit_id` is carried on the line beside the resolved
+`unit` name.
+
+### Governance
+
+| | |
+|---|---|
+| items → their Units Type | **Zero extra searches.** `readItems` / `classifyLines` already search `item`; `unitstype` is one more column |
+| the units themselves | **One `record.load` per DISTINCT Units Type.** Zero searches |
+
+`t10` asserts it: twelve lines across three items on one Units Type cost **one `record.load` and no
+`unitstype` search**. A failed load (Multiple Units of Measure off, or a deleted type) is an audit
+line and an unresolved unit, never a thrown read.
+
+### The note said nothing a reader could act on
+
+Before:
+
+```
+2 of 3 line(s) on order PO448 (16352) require serialization and have no product UUID:
+718 (718) [UNIT_UNKNOWN], 719 (719) [UNIT_UNKNOWN]. Scanning them would be refused at submit, on the dock.
+```
+
+No line number, no unit, a bare code, and no fix. After:
+
+```
+Order PO448 (16352): 2 of 3 line(s) cannot be scanned.
+line 1 — Widget A (718) in Pallet — UNIT_UNKNOWN;
+line 2 — Widget B (719) in Each — NO_ROW.
+UNIT_UNKNOWN means the line's unit is not in the item's Units Type, so no UOM Detail row could ever
+match it — fix the item's Units Type first. NO_ROW means the unit resolved but the item has no UOM
+Detail row for it — add one whose Saleable Unit is that unit.
+Until then the device must not offer these lines: a scan against them is refused at submit, with the
+goods already on the dock.
+```
+
+Line, item, unit, cause, and the fix for each distinct cause — `unresolvedAdvice()` groups by code so
+one order with two problems reads as two problems. The `lines_not_scannable` entries gained `unit`,
+`unit_id` and `code` alongside the prose `reason`.
+
+The per-line reason distinguishes the two shapes of `UNIT_UNKNOWN`:
+
+| | |
+|---|---|
+| item has a Units Type | `the line is in unit id 23, which is not in this item's Units Type. That type offers: Each(1), Case, Pallet, Package.` |
+| item has none | `this item has no Units Type … Set a Units Type on the item.` |
+
+### Still open
+
+An account with **Multiple Units of Measure switched off** has no Units Type on any item, so every
+line reports `UNIT_UNKNOWN`. A fallback straight to the single UOM Detail row would serve that account,
+and has not been built — it needs a decision on whether a one-row UOM Detail table may be assumed to
+describe the line's unit.
+
+544 assertions across 12 suites. `t10` grew to 72: id resolution, scoped-not-global lookup, same-object
+identity across every lookup path, an account-specific unit (`Vial`) present in no table anywhere, the
+two distinct failures, the message content, and the governance count.

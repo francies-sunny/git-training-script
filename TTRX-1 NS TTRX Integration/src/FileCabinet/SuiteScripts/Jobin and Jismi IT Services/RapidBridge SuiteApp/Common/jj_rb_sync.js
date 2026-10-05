@@ -3013,7 +3013,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           reason: C.REASON.AWAITING_DECISION,
           note: 'The record was deleted in NetSuite, but ' + entry.key +
             ' has no Middleware delete endpoint configured, so nothing ' +
-            'was sent. The remote object, if any, is now an orphan.'
+            'was sent. The remote object, if any, is now an orphan.',
+          // C.LOG_REASON NOTICE. The row closes, so it needs to say what the
+          // reader should DO about it or the guard in recordNoCall drops it -
+          // and rightly, because a closed row nobody can act on is noise.
+          suggested: 'Find the object in TrackTraceRX and remove it by hand. ' +
+            'Nothing in NetSuite points at it any more.'
         });
         return [];
       }

@@ -11,6 +11,36 @@
  * This is the ONLY file that calls N/https, and the ONLY file that writes
  * customrecord_jj_rb_sync_log.
  *
+ * ══ WHEN A ROW IS CREATED, AND WHEN IT IS NOT ═══════════════════════════════
+ *
+ * FOUR ADMISSIBLE REASONS — C.LOG_REASON:
+ *
+ *   CALL    an API call was made, or was about to be and was suppressed
+ *           (kill switch, dry run, environment gate)
+ *   ERROR   something failed, expected or not
+ *   ACTION  a person must do something before this can proceed
+ *   NOTICE  something must be said that the NetSuite record cannot carry —
+ *           in practice, the record is gone and there is nothing to stamp
+ *
+ * ROUTINE PROCESSING WRITES NOTHING. No change, feature disabled, not
+ * eligible, nothing to do: those are stamped on the RECORD's own Last Sync Try
+ * fields by `stampTry`, which creates no row at all. An account saving two
+ * thousand items a day must not produce two thousand rows saying nothing
+ * happened — the rows that matter drown in them.
+ *
+ * ONLY FOUR FUNCTIONS CREATE A ROW. Everything else in this file writes to one
+ * that already exists:
+ *
+ *   openCall       CALL    — one row per HTTP call, opened before it goes out
+ *   openDeferred   ACTION  — real work, unsent, still owed. Always OPEN, and it
+ *                            JOINS an existing open work item rather than
+ *                            minting a second one for the same subject
+ *   recordInbound  CALL/ERROR — the Middleware called us. A clean READ writes
+ *                            nothing; see jj_rl_rb_read.js rule 2
+ *   recordNoCall   NOTICE  — no call, no record left to stamp. The only writer
+ *                            that can REFUSE: it enforces the rule above and
+ *                            returns null for a row that would be routine
+ *
  * Master Data Developer Guide v3.4 §7.6, §12, §20.2.
  */
 define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
@@ -905,6 +935,8 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         const v = subjectValues(entry, unit, cfg, o.operation || C.OPERATION.CREATE,
           o.direction || C.DIRECTION.INBOUND);
 
+          log.debug("RB recordInbound subjectValues", v);
+
         v[L.ref] = makeRef(entry, unit);
         v[L.correlation] = o.correlation || util.uuid();
         v[L.role] = lid(C.LIST.logRole, C.ROLE.PARENT);
@@ -1322,11 +1354,48 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
      *
      * Unlike openDeferred this does not join an open work item and does not
      * have to leave the row open.
+     *
+     * ── IT CAN ALSO REFUSE ─────────────────────────────────────────────────
+     * This is the one writer where a caller can ask for a row that should not
+     * exist, because it is the one writer with no call behind it and no
+     * obligation to stay open. It enforces C.LOG_REASON and returns null when
+     * the row would be routine. Callers already handle a null (the row is
+     * advisory on every path that reaches here), so refusing is safe.
      */
     const recordNoCall = (o) => {
       const { entry, unit, cfg } = o;
       const status = o.status || C.STATUS.CLOSED_NO_ACTION;
       const isOpen = String(status).indexOf('Open') === 0;
+
+      // ══ THE RULE, ENFORCED ═══════════════════════════════════════════════
+      //
+      // C.LOG_REASON: a row exists because a call was made, something failed,
+      // a person must act, or something must be said that the record cannot
+      // carry. A row that CLOSES immediately, carries no error, and asks
+      // nothing of anyone is none of those — it is routine processing, and
+      // routine processing writes nothing.
+      //
+      // An OPEN row is always admissible: open means somebody still owes the
+      // work, which is reason 3 by definition.
+      //
+      // To record a closed notice on purpose — "this is finished, and you need
+      // to know about it anyway" — give it a `suggested`. Saying what the
+      // reader should do about it is the difference between a notice and
+      // noise, and if nothing can be suggested there was nothing to say.
+      if (!isOpen && !o.errorCode && !o.errorClass && !o.suggested) {
+        log.audit({
+          title: 'RB no Sync Log row — routine, nothing to report',
+          details: {
+            recordType: unit && unit.recordType, recordId: unit && unit.recordId,
+            operation: o.operation, status: status, note: o.note || null,
+            rule: 'C.LOG_REASON — a closed row with no error and no suggested ' +
+              'action is routine processing. Add `suggested` if a person ' +
+              'genuinely needs to see this.'
+          }
+        });
+        return null;
+      }
+
       try {
         const rec = record.create({ type: C.REC.LOG });
         const v = subjectValues(entry, unit, cfg, o.operation || C.OPERATION.UPDATE);

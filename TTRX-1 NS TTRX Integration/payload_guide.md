@@ -162,7 +162,7 @@
     bin_feature_enabled: true                                           // NetSuite Bin Management feature in effect
 }
 
-# Purchase Order
+# Purchase Order Create/Update
 {
     "transaction_uuid": "f4efb87c-e483-4f31-b91c-dcfe21382bb6",
     "custom_id": "PO446",
@@ -186,6 +186,33 @@
     "enforce_oci": false,                                               // Always false for purchase orders
     "order_nbr": "PO446",
     "po_nbr": "PO446"
+}
+
+# Sales Order Create/Update
+{
+      transaction_uuid: "",
+      custom_id: "SO609",
+      location_uuid: "57841bd1-5bd4-43cc-b5f6-17f85717a712",
+      trading_partner_uuid: "b4720a62-dd54-481a-83e2-d4f6ebaf9c66",
+      transaction_date: "2026-09-30",
+      billing_address_uuid: "24530340-c9c8-4ade-a08d-921df2f8c903",
+      ship_from_address_uuid: "",
+      ship_to_address_uuid: "24530340-c9c8-4ade-a08d-921df2f8c903",
+      sold_by_address_uuid: "",
+      line_items: [
+            {
+                  "product_uuid": "431aac76-0506-4e3c-a5b1-5c16a2822f30",
+                  "quantity": 1,
+                  "sort_order": "1"
+            }
+      ],
+      is_approved: true,
+      is_approved_is_ship_transaction: false,
+      is_manually_close_transaction: false,
+      enforce_oci: false,
+      order_nbr: "SO609",
+      po_nbr: "SO609",
+      outbound_transaction_sub_type: "SALES"
 }
 
 # Item Receipt
@@ -228,6 +255,133 @@
                     "quantity": 1
                 }
             ]
+        }
+    ]
+}
+
+# PO/SO List
+API: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=list_transactions&record_type=purchaseorder&location=13&page_size=50
+Method: GET
+record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
+Response:
+{
+    "success": true,
+    "record_type": "purchaseorder",
+    "type": "Purchase",
+    "list_token": "purchase",
+    "location_filter": {
+        "id": "13",
+        "source": "parameter"
+    },
+    "page": {
+        "offset": 0,
+        "size": 50,
+        "returned": 1,
+        "capped": false
+    },
+    "has_more": false,
+    "transactions": [
+        {
+            "internal_id": "16352",
+            "record_type": "purchaseorder",
+            "type": "Purchase",
+            "document_number": "PO448",
+            "transaction_date": "10/1/2026",
+            "status": "Pending Receipt",
+            "status_ref": "PurchOrd:B",
+            "entity_id": "1841",
+            "entity_name": "- None -",
+            "location_id": "13",
+            "location_name": "Test Location 1",
+            "subsidiary_id": "1",
+            "transaction_uuid": "d7b3794d-2feb-44ce-9340-17637aabab35",
+            "shipment_uuid": "- None -",
+            "open_lines": 1
+        }
+    ]
+}
+
+# PO/SO Detail
+API: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fetch_transaction&record_type=purchaseorder&internal_id=16352
+Method: GET
+record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
+Response:
+{
+    "success": true,
+    "internal_id": "16352",
+    "record_type": "purchaseorder",
+    "type": "Purchase",
+    "creates": "itemreceipt",
+    "document_number": "PO448",
+    "transaction_date": "10/1/2026",
+    "status": "Pending Receipt",
+    "status_ref": "PurchOrd:B",
+    "entity_id": "1841",
+    "entity_name": "Test Vendor 1",
+    "location_id": "13",
+    "location_name": "Test Location 1",
+    "subsidiary_id": "1",
+    "memo": "",
+    "transaction_uuid": "d7b3794d-2feb-44ce-9340-17637aabab35",
+    "shipment_uuid": "",
+    "default_hold_bin": "49",
+    "line_count": 3,
+    "lines": [
+        {
+            "line_unique_key": "1",
+            "item_id": "718",
+            "item_name": "718",
+            "description": "Test Purchase Description",
+            "quantity": 2,
+            "quantity_remaining": 2,
+            "unit": "PF",
+            "unit_id": "23",
+            "unit_abbreviation": "PF",
+            "conversion_rate": 1,
+            "is_base_unit": false,
+            "quantity_in_base_units": 2,
+            "remaining_in_base_units": 2,
+            "requires_serialization": true,
+            "is_serial_tracked": false,
+            "is_lot_tracked": true,
+            "uses_bins": true,
+            "product_uuid": "",
+            "product_uuid_missing_reason": "NO_ROW: the item has no UOM Detail row for unit \"PF\". It has: EACH, PALLET",
+            "uom_unit_matched": "",
+            "ndc": "",
+            "gtin": "",
+            "upc": "",
+            "pack_size": "",
+            "bin_id": "",
+            "location_id": "13"
+        },
+        {
+            "line_unique_key": "2",
+            "item_id": "719",
+            "item_name": "719",
+            "description": "Test Purchase Description",
+            "quantity": 4,
+            "quantity_remaining": 4,
+            "unit": "Case",
+            "unit_id": "1",
+            "unit_abbreviation": "CA",
+            "conversion_rate": 20,
+            "is_base_unit": false,
+            "quantity_in_base_units": 80,
+            "remaining_in_base_units": 80,
+            "requires_serialization": true,
+            "is_serial_tracked": false,
+            "is_lot_tracked": true,
+            "uses_bins": true,
+            "product_uuid": "4e1fca3d-4c2a-4a4c-a77d-2cc483391d5b",
+            "product_uuid_missing_reason": "",
+            "uom_unit_matched": "EACH",
+            "ndc": "NDC",
+            "gtin": "GTIN-14",
+            "upc": "UPC",
+            "pack_size": "Pack Size",
+            "bin_id": "",
+            "location_id": "13"
         }
     ]
 }

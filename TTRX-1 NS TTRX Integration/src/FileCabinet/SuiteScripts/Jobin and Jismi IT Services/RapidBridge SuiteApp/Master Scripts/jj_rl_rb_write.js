@@ -352,11 +352,18 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         return refuse(C.DOC_ERR.ORDER_CLOSED,
           'Order ' + txn.named(order.tranid, orderId) + ' is ' + statusRow.name +
           ', so nothing further can be received or fulfilled against it.');
-      if (!statusRow || !statusRow.sync)
+      // `scannable`, not `sync`. A purchase order at Pending Bill is fully
+      // received: its payload may still be SENT (an edit must reach the
+      // destination) but there is nothing left to put on a receipt, and the
+      // transform below would produce an empty document. Refusing here says so
+      // in words instead.
+      if (!statusRow || !statusRow.scannable)
         return refuse(C.DOC_ERR.ORDER_NOT_APPROVED,
-          'Order ' + txn.named(order.tranid, orderId) + ' is not in a status ' +
-          'from which it can be processed (it is "' + (order.status || 'unknown') +
-          '"). It should never have been offered for selection.');
+          'Order ' + txn.named(order.tranid, orderId) + ' is "' +
+          (order.status || 'unknown') + '", which has nothing left to receive ' +
+          'or fulfil. The statuses that do are: ' +
+          util.scannableStatusNames(map.fromType).join(', ') +
+          '. It should never have been offered for selection.');
       if (!order.uuid)
         return refuse(C.DOC_ERR.ORDER_NOT_SYNCED,
           'Order ' + txn.named(order.tranid, orderId) + ' has no TrackTraceRX ' +
@@ -541,7 +548,6 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // integration creates carries it — §5.2.
       setIf(TXN.origin, C.ORIGIN_MW);
       setIf(TXN.shipmentUuid, body.shipment_uuid);
-      setIf(TXN.scanSession, body.scan_session_id);
       setIf(TXN.requestUuid, body.request_uuid);
     };
 
@@ -1068,7 +1074,6 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       values[TXN.synced] = false;          // until call 2 — §11.4
       values[TXN.lastTry] = new Date();
       if (body.shipment_uuid) values[TXN.shipmentUuid] = body.shipment_uuid;
-      if (body.scan_session_id) values[TXN.scanSession] = body.scan_session_id;
       if (requestUuid) values[TXN.requestUuid] = requestUuid;
       try {
         record.submitFields({

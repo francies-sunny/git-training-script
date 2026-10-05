@@ -39,11 +39,13 @@
  * - bins_for_location     - level 1 of the inventory read service: which bins exist.
  * - bin_contents          - level 2: what is stored in a bin.
  * - item_availability     - level 3: how much of one item is there, by lot or serial.
- * - Writes a Sync Log row ONLY on a failure, or when something unexpected is
- *   detected about an answer that succeeded (C.READ_NOTE). A clean read writes
- *   nothing. Any row it does write is closed, under Direction
- *   "Inbound Query (MW - NS read)" and Sync Type "Transaction Fetch" or
- *   "Bin Query", so a scanning operator never appears in a worklist.
+ * - Writes a Sync Log row ONLY when the account is misconfigured, a search
+ *   this script asked for was refused, or something unexpected is detected
+ *   about an answer that succeeded (C.READ_NOTE). A clean read writes nothing,
+ *   and so does an expected refusal (C.READ_EXPECTED). Any row it does write is
+ *   closed, under Direction "Inbound Query (MW - NS read)" and Sync Type
+ *   "Transaction Fetch" or "Bin Query", so a scanning operator never appears in
+ *   a worklist.
  *
  * Trigger Type:
  * - RESTlet. GET and POST. Invoked by the RapidBridge Middleware only.
@@ -85,10 +87,17 @@
  *    The test harness throws on record.create, record.submitFields and save(),
  *    so this is enforced rather than intended.
  *
- * 2. A CLEAN READ WRITES NO LOG ROW AT ALL. A row is created only when the
- *    read FAILED, or when C.READ_NOTE detected something unexpected about an
- *    answer that otherwise succeeded. A warehouse opens hundreds of scan
- *    sessions a day; a row per browse buries the rows that mean something.
+ * 2. A ROW IS THE EXCEPTION, NOT THE RULE. A clean read writes nothing, and
+ *    neither does an EXPECTED refusal — an order that does not exist, or was
+ *    never sent, or is not in a scannable status. The caller asked; it has its
+ *    answer. C.READ_EXPECTED is the list.
+ *
+ *    Three things still write: NO_CONFIGURATION (the account is broken),
+ *    SEARCH_FAILED and anything unhandled (a defect), and C.READ_NOTE (an
+ *    answer that succeeded but is quietly incomplete or wrong).
+ *
+ *    A warehouse opens hundreds of scan sessions a day and mistypes plenty of
+ *    ids; a row for each buries the rows that mean something.
  *
  *    When a row IS written it still CLOSES on the spot, under Direction
  *    "Inbound Query (MW - NS read)" and status "Closed - No Action Needed",
@@ -128,7 +137,7 @@ define(['N/record', 'N/search', 'N/runtime',
   '../Common/jj_rb_core', '../Common/jj_rb_io'],
   (record, search, runtime, core, io) => {
 
-    const { C, util, config } = core;
+    const { C, util, config, units } = core;
     const { logIo } = io;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -233,6 +242,31 @@ define(['N/record', 'N/search', 'N/runtime',
       log.audit({ title: 'RB read note ' + code, details: message });
     };
 
+    /**
+     * What to DO about the unscannable lines, by cause. A note that names a
+     * problem without naming its fix is only half a message, and the two
+     * causes here have entirely different fixes.
+     */
+    const unresolvedAdvice = (unresolved) => {
+      const codes = {};
+      unresolved.forEach((l) => {
+        codes[String(l.product_uuid_missing_reason).split(':')[0]] = true;
+      });
+      const out = [];
+      if (codes.UNIT_UNKNOWN)
+        out.push('UNIT_UNKNOWN means the line\'s unit is not in the item\'s ' +
+          'Units Type, so no UOM Detail row could ever match it — fix the ' +
+          'item\'s Units Type first.');
+      if (codes.NO_ROW)
+        out.push('NO_ROW means the unit resolved but the item has no UOM ' +
+          'Detail row for it — add one whose Saleable Unit is that unit.');
+      if (codes.NO_UUID)
+        out.push('NO_UUID means the UOM Detail row exists but the Middleware ' +
+          'has not accepted the item yet — check the item\'s Last Sync Try ' +
+          'Result.');
+      return out.join(' ');
+    };
+
     /** Thrown by a handler to refuse the read with a code the caller branches on. */
     const refuseWith = (code, message) => {
       const e = new Error(message || code);
@@ -278,26 +312,65 @@ define(['N/record', 'N/search', 'N/runtime',
       const operation = String(params.operation || '').trim();
 
       try {
-        const cfg = config.get();
-        if (!cfg)
-          return failEnvelope(C.READ_ERR.NO_CONFIGURATION,
-            'No active RapidBridge Configuration row exists in this account. ' +
-            'Exactly one row must have Active ticked and not be inactive.');
-
         const read = READS[operation];
-        if (!read)
+        if (!read) {
+          // EXPECTED. A caller using a name this endpoint does not serve gets
+          // told so; nothing is wrong with the account.
+          log.audit({
+            title: 'RB read — unknown operation, no Sync Log row',
+            details: { operation: operation || '(none)', method: method }
+          });
           return failEnvelope(C.READ_ERR.UNKNOWN_OPERATION,
             'Unknown operation "' + operation + '". This endpoint accepts: ' +
             Object.keys(READS).join(', ') + '.');
+        }
+
+        const cfg = config.get();
+        if (!cfg) {
+          // NOT expected. Nothing inbound works until a person fixes this, so
+          // it earns a row even though no call was made — C.LOG_REASON ACTION.
+          recordRead(read, params, null, startedAt, method, false,
+            C.READ_ERR.NO_CONFIGURATION,
+            'No active RapidBridge Configuration row exists in this account.');
+          return failEnvelope(C.READ_ERR.NO_CONFIGURATION,
+            'No active RapidBridge Configuration row exists in this account. ' +
+            'Exactly one row must have Active ticked and not be inactive.');
+        }
 
         let out;
         try {
           out = okEnvelope(HANDLERS[read.fn](params, cfg));
         } catch (e) {
           if (e && e.rbRefusal) {
-            // A FAILURE. Always logged.
-            recordRead(read, params, cfg, startedAt, method, false,
-              e.name, e.message);
+            // ── IS THIS REFUSAL WORTH A SYNC LOG ROW? ─────────────────────
+            //
+            // Usually not. A caller asking for an order that does not exist,
+            // or one that was never sent to TrackTraceRX, has not found a
+            // defect — it has found something out, which is what a read is
+            // for. The envelope is the answer; the next call carries better
+            // parameters.
+            //
+            // Logging those would put every mistyped id and every stale cache
+            // entry on the reconciliation page, which is the opposite of what
+            // that page is for.
+            //
+            // What survives the filter: NO_CONFIGURATION (the account is
+            // broken until somebody fixes it) and SEARCH_FAILED (NetSuite
+            // refused a search this script asked for — a defect).
+            if (C.READ_EXPECTED.indexOf(e.name) === -1) {
+              recordRead(read, params, cfg, startedAt, method, false,
+                e.name, e.message);
+            } else {
+              log.audit({
+                title: 'RB read refused — expected, no Sync Log row',
+                details: {
+                  operation: params.operation, code: e.name, message: e.message,
+                  rule: 'C.READ_EXPECTED — the caller asked for something that ' +
+                    'is not there or is not eligible. That is an answer, not a ' +
+                    'fault.'
+                }
+              });
+            }
             return failEnvelope(e.name, e.message);
           }
           throw e;
@@ -551,10 +624,25 @@ define(['N/record', 'N/search', 'N/runtime',
       const start = pageStart(params);
       const loc = locationFilter(params);
 
-      // The statuses this type may be scanned in. Taken from the platform's
-      // own table, so nothing here can drift out of step with what the
-      // outbound gate allows.
-      const rows = (C.TXN_STATUS[s.recordType] || []).filter((r) => r.sync && r.ref);
+      // ── THE STATUSES THIS TYPE MAY BE SCANNED IN ────────────────────────
+      //
+      // `scannable`, NOT `sync`. They are different questions and the gap
+      // between them is the whole point:
+      //
+      //   sync       may this order's payload be SENT? Pending Bill qualifies,
+      //              because an edit to a fully received order must still reach
+      //              TrackTraceRX.
+      //   scannable  has it anything LEFT to receive or fulfil? Pending Bill
+      //              does not — every unit is already in.
+      //
+      // Offering a Pending Bill order to an operator wastes a trip to the dock:
+      // the transform would produce an empty document. Fully Billed and Billed
+      // are the same case, further along.
+      //
+      // The PARTIAL statuses stay in. Pending Billing/Partially Received means
+      // some of it is billed and some is still outstanding; the billing half is
+      // noise to a warehouse, and dropping them would hide open work.
+      const rows = (C.TXN_STATUS[s.recordType] || []).filter((r) => r.scannable && r.ref);
       const wanted = listOf(params.status);
       const allowed = wanted.length
         ? rows.filter((r) => wanted.some((w) => {
@@ -567,7 +655,9 @@ define(['N/record', 'N/search', 'N/runtime',
         throw refuseWith(C.READ_ERR.MISSING_PARAMETER,
           'None of the requested statuses (' + wanted.join(', ') + ') is a ' +
           'status a ' + s.recordType + ' can be scanned in. The scannable ' +
-          'ones are: ' + util.syncStatusNames(s.recordType).join(', ') + '.');
+          'ones are: ' + util.scannableStatusNames(s.recordType).join(', ') +
+          '. A status such as Pending Bill or Fully Billed is still ' +
+          'synchronized, but has nothing left to receive or fulfil.');
 
       const filters = [
         ['type', 'anyof', s.recordType === 'salesorder' ? 'SalesOrd' : 'PurchOrd'],
@@ -733,12 +823,16 @@ define(['N/record', 'N/search', 'N/runtime',
         throw refuseWith(C.READ_ERR.TRANSACTION_NOT_SCANNABLE,
           'Order ' + named(tranid, orderId) + ' is ' + statusRow.name +
           ', so nothing further can be received or fulfilled against it.');
-      if (!statusRow || !statusRow.sync)
+      if (!statusRow || !statusRow.scannable)
         throw refuseWith(C.READ_ERR.TRANSACTION_NOT_SCANNABLE,
           'Order ' + named(tranid, orderId) + ' is "' +
           (labelOf(head.status) || textOf(head.status) || 'unknown') + '", which ' +
           'is not a status it can be scanned in. The scannable ones are: ' +
-          util.syncStatusNames(s.recordType).join(', ') + '.');
+          util.scannableStatusNames(s.recordType).join(', ') +
+          (statusRow && statusRow.sync
+            ? '. It is still synchronized with TrackTraceRX; it simply has ' +
+              'nothing left to receive or fulfil.'
+            : '.'));
 
       const txnUuid = textOf(head[C.TXN.uuid]);
       if (!txnUuid)
@@ -763,7 +857,6 @@ define(['N/record', 'N/search', 'N/runtime',
       const count = rec.getLineCount({ sublistId: 'item' }) || 0;
       const raw = [];
       const itemIds = [];
-      const unitIds = [];
       const seen = {};
       for (let i = 0; i < count; i++) {
         const sv = (f) => {
@@ -779,13 +872,20 @@ define(['N/record', 'N/search', 'N/runtime',
         if (!seen[itemId]) { seen[itemId] = true; itemIds.push(itemId); }
         const qty = Number(sv('quantity')) || 0;
         const rem = Number(sv('quantityremaining'));
-        // ── THE UNIT. `units` is an INTERNAL ID, not a label, and a sublist
-        //    text read on a transformed record does not reliably resolve it -
-        //    which is why every line came back with unit "23" and a NO_ROW.
-        //    Keep the id AND whatever display the line offers; §resolveUnits
-        //    turns them into something a UOM Detail row can be matched on.
+        // ── THE UNIT: THE ID, NOT THE TEXT ──────────────────────────────
+        //
+        //    `units` reads back as the unit's INTERNAL ID - 23 - and its text
+        //    as an ABBREVIATION - "PF". The UOM Detail row says "Pallet". The
+        //    text can never be matched; the id can be looked up exactly.
+        //
+        //    VALUE FIRST, deliberately. On a TRANSFORMED record getSublistText
+        //    often returns nothing, which is how v1 fell through to the raw
+        //    value and reported unit "23" to the caller. Asking for the id on
+        //    purpose makes that the answer rather than the accident.
         const unitId = String(sv('units') || '');
-        if (unitId && unitIds.indexOf(unitId) === -1) unitIds.push(unitId);
+        const unitRaw = unitId ||
+          st('units') || st('unitsdisplay') || String(sv('unitsdisplay') || '');
+
         raw.push({
           line_unique_key: String(sv('orderline') || ''),
           item_id: itemId,
@@ -796,33 +896,57 @@ define(['N/record', 'N/search', 'N/runtime',
           // a partially received one, and the device needs the remaining.
           quantity: qty,
           quantity_remaining: (rem > 0 ? rem : qty),
+          unit_raw: unitRaw,
           unit_id: unitId,
-          // `unitsdisplay` is the abbreviation the line shows ("EA"). The old
-          // per-client build read exactly this field and then gave up and
-          // hardcoded 'Each' - see the reference Order Sync. It is kept as one
-          // candidate among several rather than as the answer.
-          unit_display: st('unitsdisplay') || String(sv('unitsdisplay') || ''),
           bin_id: String(sv('binnumbers') || ''),
           location_id: String(sv('location') || '')
         });
       }
 
-      // ── ONE search for the items, ONE for their UOM rows, ONE for the
-      //    units. §17.4 rule 3.
+      // ── THREE SEARCHES FOR THE WHOLE DOCUMENT. §17.4 rule 3.
+      //    items (with their Units Type) · their UOM Detail rows · the units
+      //    of the DISTINCT types those items name. Not one per line.
       const items = readItems(itemIds, cfg);
       const uom = readUom(itemIds);
-      const units = readUnits(unitIds);
+
+      const itemTypes = {};
+      itemIds.forEach((id) => { itemTypes[id] = (items[id] || {}).unitsType || ''; });
+      log.debug("fetch_transaction itemTypes", itemTypes);
+      const unitBook = units.load(itemTypes);
+      log.debug("fetch_transaction unitBook", unitBook);
 
       const lines = raw.map((l) => {
         const info = items[l.item_id] || {};
-        const u = units[l.unit_id] || {};
-        // Every spelling of this line's unit, best first. uomRowFor tries each
-        // in turn, so a client whose UOM Detail says "Each" and whose item
-        // unit is abbreviated "EA" still resolves.
-        const candidates = [u.name, u.abbreviation, l.unit_display,
-          u.pluralName, u.pluralAbbreviation].filter((x) => x);
-        const row = uomRowFor(uom, l.item_id, candidates);
-        const rate = Number(u.conversionRate) || 1;
+        // The account's own translation: whatever the line called its unit,
+        // resolved against that item's Units Type to the canonical NAME. That
+        // name is the only thing a UOM Detail row is matched on.
+        const u = unitBook.nameFor(l.item_id, l.unit_raw);
+        const row = u
+          ? uomRowFor(uom, l.item_id, u.name)
+          : {
+            uuid: '', ndc: '', gtin: '', upc: '', packSize: '', conversion: null,
+            matchedUnit: '',
+            // A DIFFERENT failure from "no UOM Detail row", and it has a
+            // different fix: the unit is not in the item's Units Type at all,
+            // so no UOM row could ever match it.
+            reason: (() => {
+              const offers = unitBook.unitsOf(l.item_id);
+              const what = l.unit_id
+                ? 'unit id ' + l.unit_id
+                : '"' + (l.unit_raw || '(blank)') + '"';
+              if (!offers.length)
+                return 'UNIT_UNKNOWN: this item has no Units Type, so its ' +
+                  'unit (' + what + ') cannot be resolved to a name and no ' +
+                  'UOM Detail row can be matched to it. Set a Units Type on ' +
+                  'the item.';
+              return 'UNIT_UNKNOWN: the line is in ' + what + ', which is not ' +
+                'in this item\'s Units Type. That type offers: ' +
+                offers.join(', ') + '. The line and the item disagree about ' +
+                'which Units Type applies - check the item\'s Units Type, or ' +
+                'the unit on the line.';
+            })()
+          };
+        const rate = u ? u.rate : 1;
         return {
           line_unique_key: l.line_unique_key,
           item_id: l.item_id,
@@ -833,13 +957,14 @@ define(['N/record', 'N/search', 'N/runtime',
           // The unit as a HUMAN VALUE, with the id beside it. v1.0 returned the
           // id here and called it `unit`, which is what made every product
           // lookup fail and every failure message unreadable.
-          unit: u.name || l.unit_display || l.unit_id,
+          unit: u ? u.name : (l.unit_raw || ''),
           unit_id: l.unit_id,
-          unit_abbreviation: u.abbreviation || l.unit_display || '',
+          unit_as_entered: l.unit_raw,
+          unit_abbreviation: u ? u.abbreviation : '',
           // Base unit is always Each (proposal v4 §5.2), so this is what the
           // line's quantity is worth in the unit TrackTrace counts in.
           conversion_rate: rate,
-          is_base_unit: u.isBase === true,
+          is_base_unit: u ? u.isBase === true : true,
           quantity_in_base_units: Math.round(l.quantity * rate * 1e6) / 1e6,
           remaining_in_base_units: Math.round(l.quantity_remaining * rate * 1e6) / 1e6,
           // ── WHAT THE DEVICE BRANCHES ON ─────────────────────────────────
@@ -877,12 +1002,25 @@ define(['N/record', 'N/search', 'N/runtime',
           'for selection and there is nothing on it to scan.');
       else if (unresolved.length)
         flag(C.READ_NOTE.LINES_NOT_SCANNABLE,
-          unresolved.length + ' of ' + lines.length + ' line(s) on order ' +
-          named(tranid, orderId) + ' require serialization and have no ' +
-          'product UUID: ' + unresolved.map((l) =>
-            named(l.item_name, l.item_id) + ' [' +
-            l.product_uuid_missing_reason.split(':')[0] + ']').join(', ') +
-          '. Scanning them would be refused at submit, on the dock.');
+          // ── WRITTEN FOR SOMEBODY READING IT COLD ──────────────────────
+          // The earlier version said `718 (718) [UNIT_UNKNOWN]`, which names
+          // no line, no unit, and gives a bare code. A reader could not act
+          // on it without opening the order and guessing which line.
+          //
+          // Each entry now carries the LINE, the ITEM, the UNIT the line is
+          // in, and the actual cause. The codes are grouped so one order with
+          // two different problems reads as two problems.
+          'Order ' + named(tranid, orderId) + ': ' + unresolved.length +
+          ' of ' + lines.length + ' line(s) cannot be scanned. ' +
+          unresolved.map((l) => {
+            const code = String(l.product_uuid_missing_reason).split(':')[0];
+            const unit = l.unit || l.unit_as_entered || '(no unit)';
+            return 'line ' + l.line_unique_key + ' — ' +
+              named(l.item_name, l.item_id) + ' in ' + unit + ' — ' + code;
+          }).join('; ') +
+          '. ' + unresolvedAdvice(unresolved) +
+          ' Until then the device must not offer these lines: a scan against ' +
+          'them is refused at submit, with the goods already on the dock.');
 
       return {
         internal_id: String(orderId),
@@ -912,6 +1050,9 @@ define(['N/record', 'N/search', 'N/runtime',
         lines_not_scannable: unresolved.map((l) => ({
           line_unique_key: l.line_unique_key,
           item: named(l.item_name, l.item_id),
+          unit: l.unit || l.unit_as_entered || '',
+          unit_id: l.unit_id || '',
+          code: String(l.product_uuid_missing_reason).split(':')[0],
           reason: l.product_uuid_missing_reason
         })),
         lines: lines
@@ -1280,8 +1421,11 @@ define(['N/record', 'N/search', 'N/runtime',
       const eligField = (cfg && cfg.eligField) || 'custitem_jj_rb_eligible';
 
       const run = (withElig) => {
+        // `unitstype` rides along on the search that is already happening.
+        // Resolving a line's unit needs it, and a second item search for one
+        // column would be a search per document for nothing.
         const columns = ['itemid', 'displayname', 'isinactive', 'islotitem',
-          'isserialitem', 'usebins'];
+          'isserialitem', 'usebins', units.TYPE_FIELD];
         if (withElig) columns.push(eligField);
         search.create({
           type: 'item',
@@ -1295,6 +1439,7 @@ define(['N/record', 'N/search', 'N/runtime',
             isLot: util.truthy(r.getValue('islotitem')),
             isSerial: util.truthy(r.getValue('isserialitem')),
             useBins: util.truthy(r.getValue('usebins')),
+            unitsType: String(r.getValue(units.TYPE_FIELD) || ''),
             eligible: withElig
               ? eligibleValue(r.getText(eligField) || r.getValue(eligField))
               : undefined
@@ -1369,57 +1514,18 @@ define(['N/record', 'N/search', 'N/runtime',
       return map;
     };
 
-    /**
-     * Resolve transaction-line unit IDS to names - ONE search.
-     *
-     * A transaction line stores its unit as an internal id. `getSublistText`
-     * on a transformed record does not reliably resolve it, and v1.0 trusted
-     * that text, fell back to the raw value, and reported `unit: "23"` on every
-     * line. Every product lookup then failed with NO_ROW against a UOM Detail
-     * table that was perfectly correct.
-     *
-     * The `unitstype` search returns one row per unit with its name,
-     * abbreviation, plural forms, conversion rate and base-unit flag. The
-     * conversion rate is what makes the base-unit quantity computable, which
-     * answers the other half of the question: TrackTrace counts in Each, and
-     * a line in Pallets has to say how many Each that is.
-     */
-    const readUnits = (ids) => {
-      const out = {};
-      if (!ids || !ids.length) return out;
-      try {
-        search.create({
-          type: 'unitstype',
-          filters: [['internalid', 'anyof', ids]],
-          columns: ['internalid', 'unitname', 'abbreviation', 'pluralname',
-            'pluralabbreviation', 'conversionrate', 'baseunit']
-        }).run().each((r) => {
-          const id = String(r.getValue('internalid') || r.id || '');
-          if (!id) return true;
-          out[id] = {
-            name: String(r.getValue('unitname') || ''),
-            abbreviation: String(r.getValue('abbreviation') || ''),
-            pluralName: String(r.getValue('pluralname') || ''),
-            pluralAbbreviation: String(r.getValue('pluralabbreviation') || ''),
-            conversionRate: Number(r.getValue('conversionrate')) || 1,
-            isBase: util.truthy(r.getValue('baseunit'))
-          };
-          return true;
-        });
-      } catch (e) {
-        // An account without the Multiple Units of Measure feature has no
-        // unitstype records at all, and every line is in the item's own base
-        // unit. Not fatal - the line's own display text is still a candidate.
-        flag(C.READ_NOTE.DEGRADED_READ,
-          'Unit names could not be resolved (' + ((e && e.message) || String(e)) +
-          '). Falling back to each line\'s displayed unit, which may be an ' +
-          'abbreviation the UOM Detail rows do not use.');
-      }
-      return out;
-    };
+    // readUnits() LIVED HERE and is gone. It searched `unitstype` by the
+    // LINE's unit value, which does not work: a line stores an abbreviation,
+    // and a `unitstype` row's internal id is the TYPE's, not the individual
+    // unit's. The search matched nothing and the fallback reported the raw
+    // abbreviation.
+    //
+    // core.units.load() does it the way the data is actually shaped: ITEM ->
+    // Units Type -> that type's units, each with its name AND abbreviation.
+    // The account supplies the translation; nothing is hardcoded.
 
     /**
-     * A line's unit, reduced to something that matches a UOM Detail row.
+     * The UOM Detail row for one line, matched on the CANONICAL UNIT NAME.
      *
      * THE CONVERSION RATE IS PART OF THE LINE'S UNIT TEXT. A line reads
      * `Each(1)` where the UOM row reads `Each`, and comparing them raw is how
@@ -1437,56 +1543,33 @@ define(['N/record', 'N/search', 'N/runtime',
      * A line with no unit at all falls back to the base unit, which proposal
      * v4 §5.2 fixes at Each.
      */
-    const uomRowFor = (map, itemId, unitText) => {
+    const uomRowFor = (map, itemId, unitName) => {
       const rows = map[itemId] || {};
-      // One spelling or several. A line offers up to five - unit name,
-      // abbreviation, the line's own display, and the two plural forms - and
-      // any of them may be the one the client typed into UOM Detail.
-      const given = Array.isArray(unitText) ? unitText.slice() : [unitText];
-      const tried = [];
-      let matched = '';
-      let row = null;
-
-      for (let i = 0; i < given.length && !row; i++) {
-        const k = unitKey(given[i]);
-        if (!k || tried.indexOf(k) !== -1) continue;
-        tried.push(k);
-        if (Object.prototype.hasOwnProperty.call(rows, k)) { row = rows[k]; matched = k; }
-      }
-
-      // LAST RESORT - the standard abbreviation of one of the seven saleable
-      // units. Only reached when nothing the account actually spelled matched,
-      // and bounded by a list this SuiteApp owns.
-      if (!row) {
-        for (let i = 0; i < tried.length && !row; i++) {
-          const alias = C.UNIT_ALIAS[tried[i]];
-          if (alias && Object.prototype.hasOwnProperty.call(rows, alias)) {
-            row = rows[alias]; matched = alias;
-          }
-        }
-      }
-
-      // Nothing at all offered - an item with no unit of measure. Proposal v4
-      // §5.2 fixes the base unit at Each.
-      if (!row && !tried.length && Object.prototype.hasOwnProperty.call(rows, C.BASE_UNIT)) {
-        row = rows[C.BASE_UNIT]; matched = C.BASE_UNIT;
-      }
+      // ONE candidate. By the time this runs, core.units has already turned
+      // whatever the line said into the canonical unit NAME from the item's
+      // own Units Type - so there is nothing left to guess at, and nothing
+      // left to hardcode. A name that does not match is a real mismatch
+      // between the Units Type and the UOM Detail table, and saying so is
+      // more useful than quietly trying six more spellings.
+      const key = unitKey(unitName) || C.BASE_UNIT;
+      const row = rows[key];
 
       if (!row) {
-        const asked = tried.length ? tried.join(' / ') : C.BASE_UNIT;
         return {
           uuid: '', ndc: '', gtin: '', upc: '', packSize: '', conversion: null,
           matchedUnit: '',
           reason: Object.keys(rows).length
-            ? 'NO_ROW: the item has no UOM Detail row for unit "' + asked +
-            '". It has: ' + Object.keys(rows).join(', ')
+            ? 'NO_ROW: the item has no UOM Detail row for unit "' +
+              (unitName || C.BASE_UNIT) + '". It has: ' +
+              Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
+              'unit, or correct the Saleable Unit on an existing one.'
             : 'NO_ROW: the item has no UOM Detail rows at all.'
         };
       }
       return Object.assign({}, row, {
-        matchedUnit: matched,
+        matchedUnit: key,
         reason: row.uuid ? '' :
-          'NO_UUID: the UOM Detail row for "' + matched +
+          'NO_UUID: the UOM Detail row for "' + (unitName || C.BASE_UNIT) +
           '" exists but has not been accepted by the Middleware yet.'
       });
     };

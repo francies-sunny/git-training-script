@@ -27,7 +27,7 @@
 define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_rb_sync'],
   (record, search, format, core, io, sync) => {
 
-    const { C, util, config } = core;
+    const { C, util, config, units } = core;
     const { logIo, client } = io;
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -134,14 +134,20 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       // the shipped item field in the object and cannot follow that setting —
       // see the note on C.LINE.)
       const eligible = {};
+      const itemTypes = {};
       try {
         search.create({
           type: 'item',
           filters: [['internalid', 'anyof', items]],
-          columns: [eligField]
+          // `unitstype` rides along. A line's unit reads back as an
+          // ABBREVIATION and a UOM Detail row's Saleable Unit is a NAME; the
+          // item's Units Type is what translates one into the other, and this
+          // is the search that is already happening.
+          columns: [eligField, units.TYPE_FIELD]
         }).run().each((r) => {
           eligible[String(r.id)] =
             eligibleValue(r.getText(eligField) || r.getValue(eligField));
+          itemTypes[String(r.id)] = String(r.getValue(units.TYPE_FIELD) || '');
           return true;
         });
       } catch (e) {
@@ -161,8 +167,11 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         return out;
       }
 
-      // Pass 3 — the destination product for every unit these items sell in.
+      // Pass 3 — the destination product for every unit these items sell in,
+      // and the account's own unit vocabulary to match them on. ONE extra
+      // search for the whole order: the DISTINCT Units Types, not one per line.
       const products = productMap(items);
+      const unitBook = units.load(itemTypes);
 
       // Pass 4 — stamp the lines and roll up.
       let anySerial = false;
@@ -181,7 +190,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         // and no quantity there, and showing one would be a lie.
         const inScope = isSerial && !lineClosed(newRecord, i) && lineQty(newRecord, i) > 0;
         setLine(newRecord, i, L.productUuid,
-          inScope ? productFor(products, id, lineUnit(newRecord, i)).uuid : '');
+          inScope ? productFor(products, id,
+            canonicalUnit(unitBook, id, lineUnit(newRecord, i))).uuid : '');
         setLine(newRecord, i, L.qtySynced,
           inScope ? lineQty(newRecord, i) : '');
       }
@@ -214,16 +224,23 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       } catch (e) { return 0; }
     };
 
+    /**
+     * The line's unit, as its INTERNAL ID.
+     *
+     * The id is the only thing on the line that can be resolved exactly. Its
+     * TEXT is an abbreviation — "PF" where the UOM Detail row says "Pallet" —
+     * and matching abbreviations against names is what made every line on
+     * every order report a missing product. `core.units` turns the id into the
+     * name; the text is kept only as a last resort for a form that does not
+     * expose the id.
+     */
     const lineUnit = (rec, line) => {
-      // The TEXT of the unit, because that is what a UOM Detail row's Saleable
-      // Unit is matched on. The internal id would tie the mapping to a list
-      // deployment rather than to the client's own vocabulary.
       try {
-        const t = rec.getSublistText({ sublistId: 'item', fieldId: 'units', line: line });
-        if (t) return t;
+        const v = rec.getSublistValue({ sublistId: 'item', fieldId: 'units', line: line });
+        if (v) return String(v);
       } catch (e) { /* not on this form */ }
       try {
-        return rec.getSublistValue({ sublistId: 'item', fieldId: 'units', line: line }) || '';
+        return rec.getSublistText({ sublistId: 'item', fieldId: 'units', line: line }) || '';
       } catch (e) { return ''; }
     };
 
@@ -294,6 +311,25 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
      *          UOM Detail row for that unit, 'NO_UUID' when it has one and the
      *          item has not been accepted by the Middleware yet.
      */
+    /**
+     * Whatever the line called its unit, resolved to the canonical NAME from
+     * the item's own Units Type.
+     *
+     * A transaction line's `units` reads back as an ABBREVIATION - "EA" - and
+     * a UOM Detail row's Saleable Unit is a NAME - "Each". Nothing matched,
+     * and every line on every order came back `Blocked - missing parent UUID`
+     * against a UOM table that was correct.
+     *
+     * NOTHING IS HARDCODED. The account's Units Type carries both spellings
+     * and this reads them. An unknown spelling returns the raw text unchanged,
+     * so productFor reports NO_ROW and the order is BLOCKED rather than sent
+     * with a product it guessed at.
+     */
+    const canonicalUnit = (unitBook, itemId, raw) => {
+      const hit = unitBook && unitBook.nameFor(itemId, raw);
+      return hit ? hit.name : raw;
+    };
+
     const productFor = (map, itemId, unitText) => {
       const rows = map[itemId] || {};
       const available = Object.keys(rows);
@@ -612,8 +648,13 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         items.push(l.itemId);
       });
 
+      // The account's own unit vocabulary. ONE search over the DISTINCT Units
+      // Types these items name, not one per line - and it is reused across
+      // the pre-sync retry below rather than loaded twice.
+      const unitBook = units.load(units.typesForItems(items));
+
       let map = productMap(items);
-      let missing = applyProducts(lines, map);
+      let missing = applyProducts(lines, map, unitBook);
 
       // §8.3 step 6 — an item that has a row for this unit but no identifier
       // has simply not been published yet. Publish it and ask again, ONCE.
@@ -628,7 +669,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
       if (unsynced.length && o && presyncItems(unsynced, o, itemNames)) {
         map = productMap(items);
-        missing = applyProducts(lines, map);
+        missing = applyProducts(lines, map, unitBook);
       }
 
       log.debug({
@@ -642,15 +683,27 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
     };
 
     /** Stamp every line from the map, and report the ones that could not be. */
-    const applyProducts = (lines, map) => {
+    const applyProducts = (lines, map, unitBook) => {
       const missing = [];
       lines.forEach((l) => {
-        const hit = productFor(map, l.itemId, l.unit);
+        // The line says "EA"; the UOM Detail row says "Each". The item's own
+        // Units Type is what reconciles them, and a spelling it does not know
+        // comes through unchanged so the mismatch is REPORTED rather than
+        // guessed around.
+        const unitName = canonicalUnit(unitBook, l.itemId, l.unit);
+        const hit = productFor(map, l.itemId, unitName);
         l.productUuid = hit.uuid;
+        l.unitName = unitName;
         if (!hit.uuid) {
           missing.push({
             line: l.line, itemId: l.itemId, itemName: l.itemName || '',
-            unit: l.unit, reason: hit.reason, available: hit.available
+            unit: unitName,
+            // Both spellings, because they are different clues: "EA did not
+            // resolve" is a Units Type problem, "Each has no UOM row" is a
+            // UOM Detail problem, and the fix differs.
+            unitAsEntered: l.unit,
+            unitResolved: unitName !== l.unit,
+            reason: hit.reason, available: hit.available
           });
         }
       });
@@ -1377,13 +1430,24 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           noRow.map((m) => 'line ' + m.line + ', item ' +
             named(m.itemName, m.itemId) +
             ', unit "' + (m.unit || 'none') + '"' +
+            // The line spells its unit as an abbreviation and the UOM Detail
+            // row spells it as a name. Showing BOTH is what makes the two
+            // failures distinguishable: a unit the Units Type never resolved,
+            // versus a resolved name the UOM table has no row for.
+            (m.unitResolved
+              ? ' (the line reads "' + m.unitAsEntered + '", resolved from the ' +
+                'item\'s Units Type)'
+              : '') +
             (m.available.length
               ? ' (the item has rows for: ' + m.available.join(', ') + ')'
               : ' (the item has no active UOM Detail row at all)')).join('; ') +
-          '. Add a UOM Detail row whose Saleable Unit matches the unit the ' +
-          'line is sold in — the unit name and the Saleable Unit are compared ' +
-          'ignoring case, spacing and any conversion rate in brackets, so ' +
-          '"Each(1)" matches "Each".');
+          '. Add a UOM Detail row whose Saleable Unit matches the unit NAME ' +
+          'the line is sold in. The line\'s unit is resolved through the ' +
+          'item\'s Units Type first, so an abbreviation on the line matches a ' +
+          'full name on the UOM row; after that the comparison ignores case, ' +
+          'spacing and any conversion rate in brackets, so "Each(1)" matches ' +
+          '"Each". If the unit itself is not in the item\'s Units Type, no ' +
+          'UOM Detail row can ever match it — fix the Units Type first.');
       }
 
       const noUuid = missing.filter((m) => m.reason === 'NO_UUID');
