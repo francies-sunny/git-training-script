@@ -658,7 +658,12 @@ define(['N/record', 'N/search', 'N/runtime',
         list_token: s.listToken,
         // Whether the list is filtered, and by what. Never left to be assumed.
         location_filter: loc.id ? { id: loc.id, source: loc.source } : null,
-        statuses: allowed.map((r) => ({ id: r.id, ref: r.ref, name: r.name })),
+        // NO `statuses` ARRAY. It echoed the filter back at the caller, who
+        // chose it - and every transaction already carries its own `status`
+        // and `status_ref`. The scannable set is a NetSuite fact, not per-call
+        // state, so a caller who wants it reads C.TXN_STATUS once. A refusal
+        // still lists the scannable names in its message, which is where that
+        // information is actually needed.
         page: { offset: start, size: size, returned: out.length, capped: size >= C.READ_PAGE.MAX },
         // The caller pages until this is false. A count would cost a second
         // search of the same set for a number that is stale by the time it
@@ -758,6 +763,7 @@ define(['N/record', 'N/search', 'N/runtime',
       const count = rec.getLineCount({ sublistId: 'item' }) || 0;
       const raw = [];
       const itemIds = [];
+      const unitIds = [];
       const seen = {};
       for (let i = 0; i < count; i++) {
         const sv = (f) => {
@@ -773,6 +779,13 @@ define(['N/record', 'N/search', 'N/runtime',
         if (!seen[itemId]) { seen[itemId] = true; itemIds.push(itemId); }
         const qty = Number(sv('quantity')) || 0;
         const rem = Number(sv('quantityremaining'));
+        // ── THE UNIT. `units` is an INTERNAL ID, not a label, and a sublist
+        //    text read on a transformed record does not reliably resolve it -
+        //    which is why every line came back with unit "23" and a NO_ROW.
+        //    Keep the id AND whatever display the line offers; §resolveUnits
+        //    turns them into something a UOM Detail row can be matched on.
+        const unitId = String(sv('units') || '');
+        if (unitId && unitIds.indexOf(unitId) === -1) unitIds.push(unitId);
         raw.push({
           line_unique_key: String(sv('orderline') || ''),
           item_id: itemId,
@@ -783,19 +796,33 @@ define(['N/record', 'N/search', 'N/runtime',
           // a partially received one, and the device needs the remaining.
           quantity: qty,
           quantity_remaining: (rem > 0 ? rem : qty),
-          unit: st('units') || String(sv('units') || ''),
+          unit_id: unitId,
+          // `unitsdisplay` is the abbreviation the line shows ("EA"). The old
+          // per-client build read exactly this field and then gave up and
+          // hardcoded 'Each' - see the reference Order Sync. It is kept as one
+          // candidate among several rather than as the answer.
+          unit_display: st('unitsdisplay') || String(sv('unitsdisplay') || ''),
           bin_id: String(sv('binnumbers') || ''),
           location_id: String(sv('location') || '')
         });
       }
 
-      // ── ONE search for the items, ONE for their UOM rows. §17.4 rule 3.
+      // ── ONE search for the items, ONE for their UOM rows, ONE for the
+      //    units. §17.4 rule 3.
       const items = readItems(itemIds, cfg);
       const uom = readUom(itemIds);
+      const units = readUnits(unitIds);
 
       const lines = raw.map((l) => {
         const info = items[l.item_id] || {};
-        const row = uomRowFor(uom, l.item_id, l.unit);
+        const u = units[l.unit_id] || {};
+        // Every spelling of this line's unit, best first. uomRowFor tries each
+        // in turn, so a client whose UOM Detail says "Each" and whose item
+        // unit is abbreviated "EA" still resolves.
+        const candidates = [u.name, u.abbreviation, l.unit_display,
+          u.pluralName, u.pluralAbbreviation].filter((x) => x);
+        const row = uomRowFor(uom, l.item_id, candidates);
+        const rate = Number(u.conversionRate) || 1;
         return {
           line_unique_key: l.line_unique_key,
           item_id: l.item_id,
@@ -803,7 +830,18 @@ define(['N/record', 'N/search', 'N/runtime',
           description: l.description,
           quantity: l.quantity,
           quantity_remaining: l.quantity_remaining,
-          unit: l.unit,
+          // The unit as a HUMAN VALUE, with the id beside it. v1.0 returned the
+          // id here and called it `unit`, which is what made every product
+          // lookup fail and every failure message unreadable.
+          unit: u.name || l.unit_display || l.unit_id,
+          unit_id: l.unit_id,
+          unit_abbreviation: u.abbreviation || l.unit_display || '',
+          // Base unit is always Each (proposal v4 §5.2), so this is what the
+          // line's quantity is worth in the unit TrackTrace counts in.
+          conversion_rate: rate,
+          is_base_unit: u.isBase === true,
+          quantity_in_base_units: Math.round(l.quantity * rate * 1e6) / 1e6,
+          remaining_in_base_units: Math.round(l.quantity_remaining * rate * 1e6) / 1e6,
           // ── WHAT THE DEVICE BRANCHES ON ─────────────────────────────────
           // Read from the ITEM through the CONFIGURED eligibility field, not
           // from the line's stamped column. Same source the outbound
@@ -819,6 +857,10 @@ define(['N/record', 'N/search', 'N/runtime',
           // Middleware yet — the device should not scan against it.
           product_uuid: row.uuid,
           product_uuid_missing_reason: row.reason,
+          // Which spelling of the unit actually found the UOM Detail row.
+          // Empty means none did, and `product_uuid_missing_reason` says what
+          // was tried against what the item has.
+          uom_unit_matched: row.matchedUnit || '',
           ndc: row.ndc, gtin: row.gtin, upc: row.upc,
           pack_size: row.packSize,
           bin_id: l.bin_id,
@@ -1328,6 +1370,55 @@ define(['N/record', 'N/search', 'N/runtime',
     };
 
     /**
+     * Resolve transaction-line unit IDS to names - ONE search.
+     *
+     * A transaction line stores its unit as an internal id. `getSublistText`
+     * on a transformed record does not reliably resolve it, and v1.0 trusted
+     * that text, fell back to the raw value, and reported `unit: "23"` on every
+     * line. Every product lookup then failed with NO_ROW against a UOM Detail
+     * table that was perfectly correct.
+     *
+     * The `unitstype` search returns one row per unit with its name,
+     * abbreviation, plural forms, conversion rate and base-unit flag. The
+     * conversion rate is what makes the base-unit quantity computable, which
+     * answers the other half of the question: TrackTrace counts in Each, and
+     * a line in Pallets has to say how many Each that is.
+     */
+    const readUnits = (ids) => {
+      const out = {};
+      if (!ids || !ids.length) return out;
+      try {
+        search.create({
+          type: 'unitstype',
+          filters: [['internalid', 'anyof', ids]],
+          columns: ['internalid', 'unitname', 'abbreviation', 'pluralname',
+            'pluralabbreviation', 'conversionrate', 'baseunit']
+        }).run().each((r) => {
+          const id = String(r.getValue('internalid') || r.id || '');
+          if (!id) return true;
+          out[id] = {
+            name: String(r.getValue('unitname') || ''),
+            abbreviation: String(r.getValue('abbreviation') || ''),
+            pluralName: String(r.getValue('pluralname') || ''),
+            pluralAbbreviation: String(r.getValue('pluralabbreviation') || ''),
+            conversionRate: Number(r.getValue('conversionrate')) || 1,
+            isBase: util.truthy(r.getValue('baseunit'))
+          };
+          return true;
+        });
+      } catch (e) {
+        // An account without the Multiple Units of Measure feature has no
+        // unitstype records at all, and every line is in the item's own base
+        // unit. Not fatal - the line's own display text is still a candidate.
+        flag(C.READ_NOTE.DEGRADED_READ,
+          'Unit names could not be resolved (' + ((e && e.message) || String(e)) +
+          '). Falling back to each line\'s displayed unit, which may be an ' +
+          'abbreviation the UOM Detail rows do not use.');
+      }
+      return out;
+    };
+
+    /**
      * A line's unit, reduced to something that matches a UOM Detail row.
      *
      * THE CONVERSION RATE IS PART OF THE LINE'S UNIT TEXT. A line reads
@@ -1348,19 +1439,54 @@ define(['N/record', 'N/search', 'N/runtime',
      */
     const uomRowFor = (map, itemId, unitText) => {
       const rows = map[itemId] || {};
-      const key = unitKey(unitText) || C.BASE_UNIT;
-      const row = rows[key];
-      if (!row)
+      // One spelling or several. A line offers up to five - unit name,
+      // abbreviation, the line's own display, and the two plural forms - and
+      // any of them may be the one the client typed into UOM Detail.
+      const given = Array.isArray(unitText) ? unitText.slice() : [unitText];
+      const tried = [];
+      let matched = '';
+      let row = null;
+
+      for (let i = 0; i < given.length && !row; i++) {
+        const k = unitKey(given[i]);
+        if (!k || tried.indexOf(k) !== -1) continue;
+        tried.push(k);
+        if (Object.prototype.hasOwnProperty.call(rows, k)) { row = rows[k]; matched = k; }
+      }
+
+      // LAST RESORT - the standard abbreviation of one of the seven saleable
+      // units. Only reached when nothing the account actually spelled matched,
+      // and bounded by a list this SuiteApp owns.
+      if (!row) {
+        for (let i = 0; i < tried.length && !row; i++) {
+          const alias = C.UNIT_ALIAS[tried[i]];
+          if (alias && Object.prototype.hasOwnProperty.call(rows, alias)) {
+            row = rows[alias]; matched = alias;
+          }
+        }
+      }
+
+      // Nothing at all offered - an item with no unit of measure. Proposal v4
+      // §5.2 fixes the base unit at Each.
+      if (!row && !tried.length && Object.prototype.hasOwnProperty.call(rows, C.BASE_UNIT)) {
+        row = rows[C.BASE_UNIT]; matched = C.BASE_UNIT;
+      }
+
+      if (!row) {
+        const asked = tried.length ? tried.join(' / ') : C.BASE_UNIT;
         return {
           uuid: '', ndc: '', gtin: '', upc: '', packSize: '', conversion: null,
+          matchedUnit: '',
           reason: Object.keys(rows).length
-            ? 'NO_ROW: the item has no UOM Detail row for unit "' +
-            (unitText || C.BASE_UNIT) + '". It has: ' + Object.keys(rows).join(', ')
+            ? 'NO_ROW: the item has no UOM Detail row for unit "' + asked +
+            '". It has: ' + Object.keys(rows).join(', ')
             : 'NO_ROW: the item has no UOM Detail rows at all.'
         };
+      }
       return Object.assign({}, row, {
+        matchedUnit: matched,
         reason: row.uuid ? '' :
-          'NO_UUID: the UOM Detail row for "' + (unitText || C.BASE_UNIT) +
+          'NO_UUID: the UOM Detail row for "' + matched +
           '" exists but has not been accepted by the Middleware yet.'
       });
     };
@@ -1399,10 +1525,10 @@ define(['N/record', 'N/search', 'N/runtime',
       get: get,
       post: post,
       // Exported for the test harness. Nothing in the SuiteApp calls these.
-      // _internals: {
-      //   READS, SCAN, scanFor, flagOf, listOf, pageSize, pageStart,
-      //   unitKey, uomRowFor, eligibleValue, named, locationFilter,
-      //   failEnvelope, okEnvelope, notes: () => NOTES.slice()
-      // }
+      _internals: {
+        READS, SCAN, scanFor, flagOf, listOf, pageSize, pageStart,
+        unitKey, uomRowFor, eligibleValue, named, locationFilter,
+        failEnvelope, okEnvelope, notes: () => NOTES.slice()
+      }
     };
   });

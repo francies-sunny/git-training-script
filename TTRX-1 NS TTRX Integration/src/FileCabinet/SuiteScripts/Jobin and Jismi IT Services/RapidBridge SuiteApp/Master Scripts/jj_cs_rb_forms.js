@@ -17,6 +17,12 @@
  *   customrecord_jj_rb_uom_detail    fieldChanged on Saleable Unit — warn on a duplicate
  *   inventoryitem ×5                 saveRecord                    — warn: no active UOM row
  *
+ * ONE RULE FOR EVERY WARNING HERE: if the user has to READ it, the save must
+ * not be running while they do. `dialog.alert` fires and forgets - the form
+ * submits, the page navigates, and the modal dies half-drawn. Use
+ * `dialog.confirm`, return false to refuse THIS save, and save from the
+ * promise once they have answered.
+ *
  * §7.10.
  */
 define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
@@ -146,14 +152,101 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
     };
 
     /**
-     * Item ×5 — warn, do not block, when an ELIGIBLE item has no active UOM
-     * Detail row. It cannot sync without one (§9.2), but the item is legitimate
-     * NetSuite data and refusing the save would make the integration an obstacle
-     * to trading.
+     * Item ×5 — the UOM Detail warning.
+     *
+     * ── THE THREE DEFECTS THIS REPLACES ────────────────────────────────────
+     *
+     * 1. THE MESSAGE VANISHED. `dialog.alert()` returns a promise and the old
+     *    code ignored it, returning true immediately. NetSuite then submitted
+     *    the form and navigated away, destroying the modal mid-render. On a
+     *    fast save the user saw a flash and nothing else. A message that has
+     *    to be read cannot be shown by something the save does not wait for.
+     *
+     *    It is now `dialog.confirm`, and the FIRST save is REFUSED. The user
+     *    reads the message, chooses, and only then does the record save. The
+     *    save now waits because it has not started.
+     *
+     * 2. NO WARNING AT ALL ON CREATE. The old check searched UOM Detail with
+     *    `[U.item, 'anyof', rec.id]`, and on a new record `rec.id` is null.
+     *    `anyof` with no value throws, the catch swallowed it, and the function
+     *    returned true — silently, on exactly the path where the warning
+     *    matters most. A brand-new item CANNOT have UOM rows in the database,
+     *    so on create there is nothing to search for: the sublist is the whole
+     *    truth.
+     *
+     * 3. "NO UOM DETAIL" AFTER ADDING THE FIRST ROWS. `custrecord_jj_rb_uom_item`
+     *    is marked `isparent = T`, so UOM Detail renders as a SUBLIST on the
+     *    item form and its rows are saved WITH the parent. In `saveRecord` those
+     *    rows exist only in the form; the database still has none. The search
+     *    answered honestly and the answer was useless. The sublist is now read
+     *    FIRST, and the search is a fallback for a form that does not show it.
+     *
+     * Still advisory. The item is legitimate NetSuite data and refusing the save
+     * outright would make this integration an obstacle to trading (§9.2).
      */
+
+    /** The child sublist UOM Detail renders in, because the item field is a parent. */
+    const UOM_SUBLIST = 'recmachcustrecord_jj_rb_uom_item';
+
+    /**
+     * How many ACTIVE UOM Detail rows this item has, and where the number came
+     * from. The sublist wins: it is what the user is looking at, and on a save
+     * it is ahead of the database by definition.
+     *
+     * @returns {{count:number, source:'sublist'|'search'|'none'}}
+     */
+    const activeUomRows = (rec) => {
+      // ── the form's own rows, pending save
+      try {
+        const n = rec.getLineCount({ sublistId: UOM_SUBLIST });
+        if (n >= 0) {
+          let active = 0;
+          for (let i = 0; i < n; i++) {
+            let inactive = false;
+            try {
+              inactive = util.truthy(rec.getSublistValue({
+                sublistId: UOM_SUBLIST, fieldId: 'isinactive', line: i
+              }));
+            } catch (e) { inactive = false; }   // column not on the sublist
+            if (!inactive) active++;
+          }
+          return { count: active, source: 'sublist' };
+        }
+      } catch (e) { /* the sublist is not on this form */ }
+
+      // ── no sublist: ask the database, but only when there is an id to ask
+      //    about. On create there is none, and that is an ANSWER (zero), not
+      //    an error to swallow.
+      const id = rec.id;
+      if (!id) return { count: 0, source: 'none' };
+
+      const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
+      try {
+        let rows = 0;
+        search.create({
+          type: C.REC.UOM,
+          filters: [[U.item, 'anyof', id], 'AND', ['isinactive', 'is', 'F']],
+          columns: ['internalid']
+        }).run().each(() => { rows++; return false; });
+        return { count: rows, source: 'search' };
+      } catch (e) {
+        // Cannot tell. Say nothing rather than warn wrongly - beforeSubmit
+        // still catches it, and the reconciliation page still lists it.
+        console.log('RB client script: UOM Detail count unavailable', e);
+        return { count: -1, source: 'none' };
+      }
+    };
+
+    /** Set while re-saving after the user accepted the warning. */
+    let uomWarningAccepted = false;
+
     const ITEM_JOB = {
       saveRecord: (ctx) => {
         const rec = ctx.currentRecord;
+
+        // Second pass: the user already read the message and said go ahead.
+        if (uomWarningAccepted) { uomWarningAccepted = false; return true; }
+
         const entry = C.MASTER[String(rec.type).toLowerCase()];
         if (!entry || !entry.fields.eligible) return true;
 
@@ -161,30 +254,49 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
         try {
           eligible = rec.getText({ fieldId: entry.fields.eligible }) ||
             rec.getValue({ fieldId: entry.fields.eligible }) || '';
-        }
-        catch (e) { return true; }
-        const s = String(eligible).toUpperCase();
-        if (s !== 'TRUE' && s !== 'T' && s !== 'YES') return true;   // not eligible: no warning
-
-        const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
-        let rows = 0;
-        try {
-          search.create({
-            type: C.REC.UOM,
-            filters: [[U.item, 'anyof', rec.id], 'AND', ['isinactive', 'is', 'F']],
-            columns: ['internalid']
-          }).run().each(() => { rows++; return false; });
         } catch (e) { return true; }
+        const v = String(eligible).toUpperCase();
+        if (v !== 'TRUE' && v !== 'T' && v !== 'YES') return true;   // not eligible
 
-        if (rows === 0)
-          dialog.alert({
-            title: 'No active UOM Detail',
-            message: 'This item is marked eligible for TrackTrace but has no active ' +
-              'UOM Detail row, so it cannot sync — each row is one Middleware ' +
-              'product. It will save, and appear on the reconciliation page ' +
-              'as "Item has no UOM Detail".'
-          });
-        return true;                                   // warn, never block
+        const found = activeUomRows(rec);
+        if (found.count !== 0) return true;         // has rows, or cannot tell
+
+        // ── THE WARNING. The save is refused so the modal cannot be raced.
+        const isNew = !rec.id;
+        dialog.confirm({
+          title: 'No UOM Detail rows',
+          message:
+            (isNew
+              ? 'This new item is marked eligible for TrackTrace and has no UOM ' +
+                'Detail rows.'
+              : 'This item is marked eligible for TrackTrace and has no active ' +
+                'UOM Detail rows.') +
+            '\n\nEach UOM Detail row is one product in the Middleware, so with ' +
+            'none the item cannot sync. It will save, and appear on the ' +
+            'reconciliation page as "Item has no UOM Detail".' +
+            '\n\nOK to save it anyway, or Cancel to add the rows first.'
+        }).then((proceed) => {
+          if (!proceed) return;                     // user went back to add rows
+          uomWarningAccepted = true;
+          try {
+            rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
+          } catch (e) {
+            // Not every form exposes save() from a client script. Say so
+            // plainly rather than leave the user on a form that will not go.
+            uomWarningAccepted = true;
+            dialog.alert({
+              title: 'Press Save again',
+              message: 'Press Save once more to save this item. The warning ' +
+                'will not appear a second time.'
+            });
+          }
+        }).catch((e) => {
+          // The dialog itself failed. Do not strand the record.
+          console.log('RB client script: UOM confirm failed', e);
+          uomWarningAccepted = true;
+        });
+
+        return false;                               // stop THIS save, not the record
       }
     };
 

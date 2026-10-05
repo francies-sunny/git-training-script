@@ -644,7 +644,31 @@ define(['N/search'],
     });
 
     /**
-     * The base unit is ALWAYS Each — proposal v4 §5.2. A constant, not a
+     * NETSUITE'S UNIT ABBREVIATIONS, mapped to this SuiteApp's own saleable-unit
+     * list values.
+     *
+     * A transaction line names its unit by INTERNAL ID. Resolving that id gives
+     * a Unit Name ("Each") and an Abbreviation ("EA"), and an account may show
+     * either. `customlist_jj_rb_saleable_unit` holds seven values and nothing
+     * else, so mapping the standard abbreviation of each one is bounded and
+     * safe - it is not a guess at arbitrary text.
+     *
+     * Tried only AFTER the unit name and the abbreviation have both failed to
+     * match a UOM Detail row, so a client who spells their units out in full
+     * never reaches it.
+     */
+    const UNIT_ALIAS = Object.freeze({
+      EA: 'EACH', EACH: 'EACH', EAS: 'EACH', UNIT: 'EACH', UNITS: 'EACH',
+      CS: 'CASE', CASE: 'CASE', CASES: 'CASE',
+      PLT: 'PALLET', PAL: 'PALLET', PALLET: 'PALLET', PALLETS: 'PALLET',
+      PR: 'PAIR', PAIR: 'PAIR', PAIRS: 'PAIR',
+      BX: 'BOX', BOX: 'BOX', BOXES: 'BOX',
+      BTL: 'BOTTLE', BOT: 'BOTTLE', BOTTLE: 'BOTTLE', BOTTLES: 'BOTTLE',
+      CTN: 'CARTON', CART: 'CARTON', CARTON: 'CARTON', CARTONS: 'CARTON'
+    });
+
+    /**
+     * The base unit is ALWAYS Each - proposal v4 §5.2. A constant, not a
      * switch: v1.0 had a "convert to lowest unit" configuration value and it
      * was deleted when the proposal settled the question.
      */
@@ -1016,7 +1040,7 @@ define(['N/search'],
       DIRECTION, SYNCTYPE, OPERATION, REASON,
       // transactions
       TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
-      TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
+      TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW, UNIT_ALIAS,
       // reads
       READ_ERR, READ_NOTE, READ_PAGE
     });

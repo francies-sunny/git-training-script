@@ -23,8 +23,11 @@
  * - item_receipt (POST)     - creates an Item Receipt, transformed from the Purchase Order.
  * - item_fulfillment (POST) - creates an Item Fulfilment, transformed from the Sales Order,
  *                             in the configured shipping status.
- * - identifier (PUT)        - call 2 of the two-call protocol: stores the TrackTraceRX
- *                             transaction UUID, validating its uniqueness first.
+ * - identifier (PUT)        - call 2 of the two-call protocol: stores the SHIPMENT
+ *                             UUID. A receipt has no identifier of its own, and
+ *                             one shipment may cover several orders, so several
+ *                             documents share it - it is NOT checked for
+ *                             uniqueness. request_uuid remains the duplicate guard.
  * - Rejects the WHOLE submission when any line fails validation, so nothing is
  *   created and a retry can always repair it.
  * - Guards duplicates on the record's native externalId, which the platform
@@ -500,7 +503,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // state with a worklist, not a fault.
       logIo.stampTry(unit, C.TRY.CREATED_NO_UUID, null,
         'Created from a Middleware submission. Waiting for the identifier ' +
-        'call that stores the TrackTraceRX identifier.');
+        'call that stores the shipment UUID.');
 
       log.audit({
         title: 'RB inbound created ' + map.syncType + ' ' + newId,
@@ -718,9 +721,37 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * before storing it. Two records claiming one remote object is a problem
      * nothing downstream can untangle.
      */
+    /**
+     * Call 2 of the two-call protocol - §11.4.
+     *
+     * ── WHAT THE IDENTIFIER ACTUALLY IS, AND WHY IT IS NOT UNIQUE ───────────
+     *
+     * An Item Receipt and an Item Fulfilment have NO identifier of their own.
+     * What TrackTraceRX returns is the SHIPMENT UUID, and one shipment can
+     * cover several purchase or sales orders - so several receipts, created
+     * from several POs, legitimately carry THE SAME shipment UUID.
+     *
+     * That is the opposite of an order. A Sales Order and a Purchase Order each
+     * get a transaction UUID that IS unique per record, and `findByUuid` exists
+     * to defend that.
+     *
+     * So on a receipt or a fulfilment the value lands in `shipmentUuid` and
+     * NOTHING checks it for uniqueness. Two records naming one shipment is the
+     * normal case, not a duplicate. Refusing it would have made a multi-order
+     * delivery impossible to record: the second receipt would come back
+     * DUPLICATE_IDENTIFIER with nothing whatever wrong.
+     *
+     * The duplicate guard has not gone anywhere. It is the Middleware's
+     * `request_uuid` in the native externalId, which is unique per submission
+     * and enforced by the platform (§4.1.2). Nothing is weaker for this.
+     */
     const storeIdentifier = (body, cfg, startedAt) => {
       const requestUuid = String(body.request_uuid || '').trim();
-      const ttUuid = String(body.tracktrace_uuid || body.uuid || '').trim();
+      // `shipment_uuid` is what this value IS. The other two names are accepted
+      // because the field is `uuid` on the wire and earlier callers send
+      // `tracktrace_uuid`.
+      const ttUuid = String(body.shipment_uuid || body.tracktrace_uuid ||
+        body.uuid || '').trim();
       // `record_type` arrives as a NetSuite record type ('itemreceipt'), which
       // is not the key this table uses. Match on either, and fall back to the
       // receipt — the identifier write is the same either way, and the only
@@ -746,7 +777,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       if (!ttUuid)
         return refuse(C.DOC_ERR.MALFORMED_PAYLOAD,
-          'No tracktrace_uuid was supplied.');
+          'No shipment_uuid was supplied. On an Item Receipt or an Item ' +
+          'Fulfilment this call stores the SHIPMENT identifier; the document ' +
+          'has no identifier of its own.');
 
       // Address the record by whichever the caller knows. request_uuid is the
       // one the Middleware always has, because it chose it.
@@ -764,22 +797,25 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           'No ' + map.syncType + ' carries external id ' + requestUuid + '.');
       if (!recordType) recordType = String(map.recordType);
 
-      // OUR OBLIGATION — uniqueness, before storing.
-      const clash = findByUuid(recordType, ttUuid, internalId);
-      if (clash)
-        return refuse(C.DOC_ERR.DUPLICATE_IDENTIFIER,
-          'Identifier ' + ttUuid + ' is already stored on ' + recordType + ' ' +
-          clash + '. Two records cannot claim one TrackTraceRX object.',
-          unitFor(map, internalId, ''));
+      // ── NO UNIQUENESS CHECK. See the note on this function. A shipment
+      //    covering three purchase orders produces three receipts that all
+      //    carry its UUID, and every one of them is correct.
+      //
+      //    An ORDER is different: its transaction UUID is unique per record,
+      //    and findByUuid still guards that on the outbound path.
 
-      const unit = unitFor(map, internalId, ttUuid);
+      const unit = unitFor(map, internalId, '');
       unit.recordType = recordType;
 
       try {
         record.submitFields({
           type: recordType, id: internalId,
           values: {
-            [TXN.uuid]: ttUuid,
+            // The SHIPMENT field, not the transaction-UUID field. A receipt
+            // written into custbody_jj_rb_uuid would read as an order with its
+            // own TrackTrace object, and the outbound engine would later try to
+            // PUT updates to something that was never a transaction.
+            [TXN.shipmentUuid]: ttUuid,
             [TXN.synced]: true,
             [TXN.lastSync]: new Date(),
             [TXN.error]: ''
@@ -799,14 +835,18 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         status: C.STATUS.CLOSED_SUCCESS,
         endpoint: C.INBOUND.IDENTIFIER, method: 'PUT',
         httpStatus: 200, startedAt: startedAt,
-        requestUuid: requestUuid, uuid: ttUuid, request: body
+        requestUuid: requestUuid, shipmentUuid: ttUuid, request: body
       });
 
       log.audit({
-        title: 'RB inbound identifier stored',
-        details: { recordType: recordType, internalId: internalId, uuid: ttUuid }
+        title: 'RB inbound shipment identifier stored',
+        details: { recordType: recordType, internalId: internalId,
+          shipmentUuid: ttUuid }
       });
-      return okEnvelope({ internal_id: internalId, external_id: requestUuid });
+      return okEnvelope({
+        internal_id: internalId, external_id: requestUuid,
+        shipment_uuid: ttUuid
+      });
     };
 
     const mapForRecordType = (t) => {
@@ -840,24 +880,11 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       return id;
     };
 
-    /** Another record of this type already claiming that TrackTraceRX id. */
-    const findByUuid = (recordType, uuid, exceptId) => {
-      let hit = '';
-      try {
-        search.create({
-          type: recordType,
-          filters: [[TXN.uuid, 'is', uuid], 'AND',
-            ['mainline', 'is', 'T']],
-          columns: ['internalid']
-        }).run().each((r) => {
-          if (String(r.id) !== String(exceptId)) { hit = String(r.id); return false; }
-          return true;
-        });
-      } catch (e) {
-        log.error('Error @ inbound findByUuid', e);
-      }
-      return hit;
-    };
+    // findByUuid() LIVED HERE and is gone. It refused a second record claiming
+    // the same identifier - correct for an order, wrong for a receipt, because
+    // one shipment covers several orders and therefore several receipts. See
+    // the note on storeIdentifier. The outbound engine keeps its own
+    // equivalent check for transaction UUIDs, where uniqueness does hold.
 
     const readOrder = (map, orderId) => {
       const out = { found: false };

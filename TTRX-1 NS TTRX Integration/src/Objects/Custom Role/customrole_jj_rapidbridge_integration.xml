@@ -16,11 +16,15 @@
   <parentrolescriptid></parentrolescriptid>
   <restrictbydevice>F</restrictbydevice>
   <restricttimeandexpenses>F</restricttimeandexpenses>
-  <subsidiaryoption>OWN</subsidiaryoption>
+  <subsidiaryoption>ALL</subsidiaryoption>
   <subsidiaryviewingallowed>F</subsidiaryviewingallowed>
   <tfaduration>0</tfaduration>
   <tfarequired>OFF</tfarequired>
   <permissions>
+    <permission>
+      <permkey>TRAN_FIND</permkey>
+      <permlevel>VIEW</permlevel>
+    </permission>
     <permission>
       <permkey>TRAN_ITEMSHIP</permkey>
       <permlevel>FULL</permlevel>
@@ -87,6 +91,10 @@
     </permission>
     <permission>
       <permkey>LIST_VENDOR</permkey>
+      <permlevel>EDIT</permlevel>
+    </permission>
+    <permission>
+      <permkey>ADMI_CUSTLIST</permkey>
       <permlevel>EDIT</permlevel>
     </permission>
     <permission>

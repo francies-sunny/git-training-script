@@ -187,3 +187,47 @@
     "order_nbr": "PO446",
     "po_nbr": "PO446"
 }
+
+# Item Receipt
+{
+    "operation": "item_receipt",
+    "request_uuid": "11111111-2222-3333-4444-555555555555",
+    "order_id": "16050",
+    "shipment_uuid": "",
+    "scan_session_id": "POSTMAN-TEST-01",
+    "transaction_date": "2026-09-30",
+    "memo": "Postman test receipt for PO447",
+    "lines": [
+        {
+            "line_unique_key": "1",
+            "item_id": "718",
+            "quantity": 2,
+            "exception_reason": "Short stock at the bin",
+            "exception_note": "One case damaged in transit",
+            "inventory": [
+                {
+                    "lot": "LOT-718-A",
+                    "expiry": "2027-12-31",
+                    "quantity": 2
+                }
+            ]
+        },
+        {
+            "line_unique_key": "2",
+            "item_id": "719",
+            "quantity": 4,
+            "inventory": [
+                {
+                    "lot": "LOT-719-A",
+                    "expiry": "2027-06-30",
+                    "quantity": 3
+                },
+                {
+                    "lot": "LOT-719-B",
+                    "expiry": "2028-01-31",
+                    "quantity": 1
+                }
+            ]
+        }
+    ]
+}
