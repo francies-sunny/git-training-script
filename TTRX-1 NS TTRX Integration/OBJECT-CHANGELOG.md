@@ -1607,3 +1607,361 @@ describe the line's unit.
 544 assertions across 12 suites. `t10` grew to 72: id resolution, scoped-not-global lookup, same-object
 identity across every lookup path, an account-specific unit (`Vial`) present in no table anywhere, the
 two distinct failures, the message content, and the governance count.
+
+---
+
+## Pass 22 — a Sync Log row means somebody has to do something
+
+`jj_rb_core.js` · `jj_rl_rb_read.js` · `expected_payload.md` · the Postman collection.
+
+Three corrections from the second live run, all of them about **what is worth saying**.
+
+### 1. A non-eligible item is not missing a UUID
+
+```json
+"product_uuid_missing_reason": "NO_ROW: the item has no UOM Detail row for unit \"Test\". It has: EACH. Add a UOM Detail row for that unit, or correct the Saleable Unit on an existing one."
+```
+
+That line's item **is not eligible**. It is never sent to TrackTraceRX, so it has no product
+UUID **by design** — the UOM Detail table has no row for it because it should not have one. The
+message was telling a reader to go and fix something that is already right.
+
+`fetch_transaction` now reports the reason **only on an eligible line**:
+
+```js
+product_uuid_missing_reason: info.eligible === true ? row.reason : '',
+```
+
+The real cost of the old behaviour was not the noise. It was that a reader who sees the field
+filled on lines where nothing is wrong learns to skip it, and then skips it on the line where it
+matters. `lines_not_scannable` already counted only eligible lines; the per-line field now agrees
+with it.
+
+The outbound path needed no change — `filterLines` drops non-serialized lines before
+`applyProducts` ever sees them.
+
+### 2. Two classes of note, and only one of them is a work item
+
+Every note used to write a Sync Log row, all of them `Closed - No Action Needed` with a
+`suggested` that said, in so many words, that no action was needed. A row that says nothing is
+wanted is a row nobody should have written.
+
+`C.READ_NOTE_REVIEW` splits them:
+
+| Note | Row? | Why |
+|---|---|---|
+| `LINES_NOT_SCANNABLE` | **OPEN - Needs Review** | An **eligible** item on a live order has no product UUID for the unit the line is in. The device is refused at submit with the goods on the dock. Only a person inside NetSuite can fix it |
+| `DEGRADED_READ` | **OPEN - Needs Review** | A configured field is not deployed, or a join the account's features do not support. An administrator has to make the answer whole |
+| `RESULT_TRUNCATED` | audit only | The caller asked for more than a page. It pages |
+| `NO_SCANNABLE_LINES` | audit only | The order has no item line. That is the order, not a fault |
+| `UNFILTERED_LIST` | audit only | The caller omitted the location filter. The caller is who can add it |
+
+A clean read still writes nothing at all. That has not changed since Pass 16 and is the point of
+the whole sequence.
+
+**The row is OPEN now, and that is the change.** Pass 15 closed every read row on the reasoning
+that a failed lookup is a lookup the operator repeats. True — but `LINES_NOT_SCANNABLE` is not a
+failed lookup. The read **succeeded**, the device got the order, and two of its lines will be
+refused at submit. Nobody discovers that by reading a closed row, which is exactly how this
+reached a live run.
+
+`suggested` now names the fix rather than disclaiming one.
+
+### 3. One open row per order per code
+
+A device polling the same order every thirty seconds would open a work item every thirty seconds,
+all of them saying the same thing.
+
+```js
+if (review && alreadyOpen(recType, txnId, code)) return;
+```
+
+One search, four filters — open, record type, internal id, error code — and **it runs only when a
+review note fired**, so the path that runs all day costs nothing. The code is part of the key on
+purpose: an order whose UOM Detail is missing *and* whose read came back degraded has two
+problems and two people to fix them. A search that throws returns `false`; writing a duplicate row
+is a much smaller failure than silently writing none.
+
+The dedupe key is the **resolved** NetSuite type, not the caller's spelling. `PO`, `po` and
+`purchaseorder` are one subject, and a key that disagreed with itself across spellings would open
+one work item per spelling the device happens to send.
+
+### Postman
+
+| | |
+|---|---|
+| `scan_session_id` | Removed from all three write bodies. Dropped from the scripts in Pass 19; the collection still sent it |
+| **4.5 — a status that syncs but cannot be scanned** | New. `status=Pending Bill` is refused. It proves the two sets are different questions: `sync` asks *may the payload be sent* (yes — an edit to a billed order must still reach TrackTrace), `scannable` asks *is anything left to receive* (no). Narrowing `sync` to match `scannable` is a silent data-divergence bug, and this is the request that would catch it. 4.5–4.12 renumbered to 4.6–4.13 |
+| 1.4 | Two assertions added: a non-eligible line carries no missing-UUID reason, and every entry in `lines_not_scannable` belongs to a line that is eligible |
+
+`expected_payload.md` updated to match — the `fetch_transaction` example now shows the live
+account's Pallet line (`unit_id: "23"`, rate 16), a populated `lines_not_scannable` block, the
+three codes with their fixes, and the Sync Log rule for reads.
+
+564 assertions across 12 suites. `t9` covers the five notes and their two classes, the OPEN
+status, the dedupe, and that a different code on the same order is a different finding. `t10`
+covers the non-eligible line: no reason, not counted, no note, no row — and a mixed order where
+the note counts one of two lines.
+
+---
+
+## Pass 23 — inventory_release: the Bin Transfer, and the lot arrives by name
+
+`jj_rb_core.js` · `jj_rl_rb_write.js` · 4 new transaction body fields · `t13.js`.
+
+The last unbuilt Phase 1 flow. §11.6 / Design v3.1 §9.
+
+### What it is
+
+An Item Receipt puts received stock in the location's **on-hold bin** because it has not yet been
+proved genuine. TrackTrace runs EPCIS verification; the Middleware decides which lots passed and
+have no damage; it calls this, and NetSuite moves exactly those lots to a **good bin**.
+
+**A Bin Transfer, not an Inventory Status Change.** The 8 September meeting settled that inventory
+state is represented by physical bins — bin management is already a prerequisite of this
+integration and Inventory Status is a separate feature not every account has (Design §9.2.1).
+There is no `InventoryStatusChange` anywhere in this SuiteApp and there is not going to be one.
+
+### The lot arrives by NAME
+
+The Middleware knows lots as TrackTrace prints them — `LOT-2026-0815`. NetSuite stores them as
+internal ids. One `inventorynumber` search per submission bridges the two:
+
+```
+filters: item anyof <the items on this release>  AND  quantityonhand greaterthan 0
+```
+
+Filtering on **on-hand** is not an optimisation. A lot with no stock cannot be what is being
+released, and leaving it out keeps the result to what the warehouse actually holds.
+
+The index is keyed **per item**, deliberately. Two items may legitimately carry the same lot name,
+and releasing item A's stock because item B has a lot of that name is precisely the class of
+mistake this integration exists to prevent. Names are matched trimmed and uppercased, because a
+scanner and a label printer disagree about case more often than they agree.
+
+**A name that resolves to nothing is `LOT_NOT_FOUND` and the release refuses.** It never creates
+the lot. A release moves stock that already exists; a lot invented here would be an empty record
+nobody asked for, sitting in a regulated account's inventory forever.
+
+### And it must still be in the on-hold bin
+
+One `inventorybalance` search — item, location, from-bin, lot — answers both of the rules Design
+§9.4 asks for:
+
+| | |
+|---|---|
+| nothing there | `LOT_NOT_IN_BIN`. Either it was already released or somebody moved it by hand |
+| not enough there | `QTY_EXCEEDS_IN_BIN`, naming both numbers |
+
+**Refused, never redirected.** Guessing where the stock went is how a regulated product gets
+released from a bin nobody verified.
+
+`inventorybalance` is the only search that is bin-aware AND lot-aware at once, which is exactly
+the question a release asks. The item's own quantity fields answer a different one.
+
+### One transfer, grouped by item
+
+The `inventory` sublist carries one line per item; the lots hang off that line's inventory detail.
+Two lots of one item are **two inventory assignments on one sublist line**, not two lines. `t13`
+asserts it.
+
+The bins are written in both places — on the assignment (`binnumber` / `tobinnumber`, the
+lot-tracked shape) and on the sublist line (the bin-only shape). The setters are no-ops when a
+field is not on the form, so whichever the account exposes is the one that takes. **This is the one
+thing in the handler that wants confirming on the first live run**, and it is called out in the
+code rather than left to be discovered.
+
+### A partial release leaves the row OPEN
+
+| | |
+|---|---|
+| everything moved | `Closed - Success` |
+| some stayed behind | **`Open - Needs Review`**, with the quantities in `suggested` |
+
+A partial release is **normal** — some serials pass and some do not. It is also the state that
+goes unnoticed: no call failed, nothing errored, and the remainder sits in the on-hold bin until a
+picker finds the good bin short. An open row is the only thing that surfaces it before the
+warehouse does (Design §9.12).
+
+`held_quantity` is measured, not guessed: the balance read above, minus what has now moved.
+
+### Rules 1 and 2 hold unchanged
+
+**All or nothing.** One bad line rejects the whole release and nothing moves. The stock staying in
+the on-hold bin is the safe outcome, and the refusal says so.
+
+**A retry is a SUCCESS.** `request_uuid` becomes the Bin Transfer's native `externalid`; a repeat
+is answered with the transfer that already exists and **no second transfer is created**
+(Design §9.8).
+
+### Objects
+
+Four new transaction body fields, Item Receipt only, under `custtab_jj_rb_transaction`:
+
+| Field | Type | |
+|---|---|---|
+| `custbody_jj_rb_released_qty` | Decimal | What moved to a good bin |
+| `custbody_jj_rb_held_qty` | Decimal | What is still held. > 0 means a partial release |
+| `custbody_jj_rb_released_at` | Date/Time | Blank means no release ever arrived — what the held-stock threshold measures against |
+| `custbody_jj_rb_bin_transfer` | Text | The transfer's internal id. TEXT, not a List/Record link: a transaction link has to name a record type, and the useful answer is one id a user can paste |
+
+These three are what the *received but not released* worklist is built on. A receipt whose stock is
+never released fails **silently** — no call errored; the stock simply sits there.
+
+`Inventory Release` was already a value in `customlist_jj_rb_sync_type` and `Release` in
+`customlist_jj_rb_operation`, seeded in the first build. This pass is the code behind them.
+
+New constants: `C.INBOUND.INV_RELEASE`, `C.SYNCTYPE.INV_RELEASE`, `C.OPERATION.RELEASE`, four
+`C.LINE_ERR` codes, `C.DOC_ERR.NOTHING_TO_RELEASE`, four `C.TXN` field ids.
+
+### Governance
+
+Two searches for the whole submission — the lots, then the balance — plus the item read the
+receipt path already had. Not two per line.
+
+### Still to tell the client
+
+> **A bin does not make stock unavailable.** NetSuite will commit stock sitting in the on-hold
+> bin: the quantity is on hand at that location, so the availability calculation includes it. The
+> on-hold bin buys **process** control — a picker directed to good bins does not take from it —
+> not **system** control. Design §9.4.1, carried as **T-32**, and it should be answered before
+> Phase 1 go-live rather than after.
+
+651 assertions across 13 suites. `t13` (87) covers the happy path, the receipt stamp, the Sync Log
+row and its open/closed split, two lots on one line, name matching with case and padding, every
+refusal, both bin fallbacks, all-or-nothing, the duplicate retry, a release with no receipt named,
+and a save NetSuite refuses.
+
+---
+
+## Pass 24 — the release ledger: externalId answers the wrong question
+
+`jj_rb_core.js` · `jj_rl_rb_write.js` · `custbody_jj_rb_release_log` · `t13.js`.
+
+Pass 23 shipped `inventory_release` with two guards, and **neither of them guards what matters**.
+
+### The defect
+
+```
+call 1 : request_uuid = A, lot LOT-2026-0815, 24     → moved
+call 2 : request_uuid = B, lot LOT-2026-0815, 24     → moved AGAIN
+```
+
+| Guard | What it answers | Why it misses this |
+|---|---|---|
+| `request_uuid` in the native `externalId` | "is this the **same call** again?" | A Middleware retry after a timeout often carries a **fresh** uuid. Different uuid, different external id, no collision |
+| the on-hold bin's `inventorybalance` | "is the stock still there?" | **Shared** — several receipts put stock in one hold bin, so a balance of 24 says nothing about *whose* 24 it is, and the second call happily moves another receipt's goods. **Lagging** — it is a search index, so a release called seconds after its receipt reads a number that is not true yet |
+
+Those are two different questions, and neither is *"has this stock already been released?"*
+
+### The ledger
+
+`custbody_jj_rb_release_log` — Long Text on the Item Receipt, locked, under
+`custtab_jj_rb_transaction`.
+
+```json
+{ "v": 1, "receipt": "2481003", "seq": 3, "updated": "2026-10-05T10:11:12.000Z",
+  "lots": { "718|901": { "item":"718", "lot":"LOT-2026-0815", "lotId":"901",
+                         "received":24, "released":20 } },
+  "calls": [ { "uuid":"A", "bt":"2492118", "at":"...", "moved":[{"k":"718|901","q":20}] } ],
+  "callCount": 3 }
+```
+
+It has neither problem. **Per receipt**, so another receipt's stock in the same bin is invisible
+to it. **A stored field**, so it reads back immediately and exactly — no index between the write
+and the next read. And it holds `received` beside `released`, which is the only pair of numbers
+that can answer the question.
+
+Every line is now measured as `received − released − claimed-earlier-in-this-submission`.
+
+### Entitlement is read once per receipt, not once per call
+
+On the **first** release, `seedLedger` reads what the receipt actually received per lot and stores
+it. Every later release reads it back out of the JSON.
+
+| | |
+|---|---|
+| 1 | A transaction search with the `inventoryDetail` join — one search, the cheap answer |
+| 2 | `record.load` of the receipt and its inventory-detail subrecords — always works, used when the join is not available in that account |
+
+An item with no inventory detail still gets a row keyed on the item alone, so a bin-only release
+has an entitlement too.
+
+### Four new refusals
+
+| | |
+|---|---|
+| `LOT_NOT_ON_RECEIPT` | The lot may be perfectly real and sitting in that very bin — **put there by a different receipt**. Releasing it against this one would move somebody else's goods |
+| `ALREADY_RELEASED` | Everything this receipt received of that lot has gone. *"If stock genuinely needs moving again, it is a bin transfer somebody makes in NetSuite, not a release"* |
+| `QTY_EXCEEDS_RECEIVED` | Names received, already-released and what is left |
+| `RECEIPT_NOT_IDENTIFIED` · `RECEIPT_NOT_READABLE` | Document level — see below |
+
+### The Item Receipt reference is now MANDATORY
+
+v1.1 let a release through without one and created the transfer anyway. The receipt **carries the
+ledger**, so without it there is no duplicate guard worth the name — and Design §9.3 listed the
+receipt reference as mandatory all along. v1.1 was the deviation, not this.
+
+### The balance check is demoted, and made lag-aware
+
+It stays as a **second** question — the ledger says what *may* move, the balance says whether it
+is *still there*. But:
+
+| the balance returns | meaning | effect |
+|---|---|---|
+| rows, lot missing or short | somebody moved it by hand | **refuse** — `LOT_NOT_IN_BIN` / `QTY_EXCEEDS_IN_BIN` |
+| **no rows at all** | the index has not caught up | **proceed**, with an audit line |
+
+An empty `inventorybalance` is far more often a stale index than a vanished pallet, and refusing
+a legitimate release seconds after its receipt is the worse failure. `heldAfter()` and
+`movedFor()` are gone with it.
+
+### Writing it back: re-read, merge, write
+
+The copy read before the save is **stale** by the time the transfer is saved. Writing it back
+would silently undo a concurrent call's figures — a lost update, and the worst possible one,
+because the number it loses is the guard.
+
+So `commitLedger` merges onto a **fresh** read. The remaining window is between that read and the
+`submitFields` — milliseconds. NetSuite offers no row lock that would close it entirely, and
+pretending otherwise would be worse than saying so, so the code says so.
+
+Two honest failure paths, both of which could previously have been silent:
+
+| | |
+|---|---|
+| the fresh read shows we are now **over** | The transfer is saved and cannot be un-saved by wishing. The ledger is written anyway — it must stay a true record of what moved — and the Sync Log row becomes a **FAILURE** with an open work item naming the lots. Somebody reverses it by hand |
+| the ledger **will not write** | The stock moved and the receipt does not know. `log.error` plus a FAILURE row saying a later release could move the same lot again |
+
+A corrupt or unparseable ledger **refuses the release**. Replacing it with an empty one would hand
+a duplicate call a clean slate, which is the one outcome the field exists to prevent.
+
+### The response says both numbers
+
+`released_quantity` used to mean "what this call moved", which is exactly what made a second
+release look reasonable. Now:
+
+| | |
+|---|---|
+| `moved_quantity` | this call |
+| `released_quantity` · `received_quantity` · `held_quantity` | the receipt, cumulatively |
+| `fully_released` | `held_quantity === 0` |
+| `lines_released[].released_to_date` · `.received` | per lot |
+
+`held_quantity` is the whole receipt's unreleased balance, not "what is left of the lots this call
+happened to name" — the earlier reading hid a receipt with a second lot nobody had released. The
+Sync Log row closes only when the **receipt** is done.
+
+### Trade-off, stated
+
+A Long Text field is not a child record table. It cannot be searched or reported on, and it is one
+field two concurrent calls contend for. What it buys is one read and one write per release instead
+of a search plus N record creates, and a guard that is correct the instant it is written. `calls`
+keeps the most recent 50 — the per-lot totals are never trimmed, because they are the guard, and
+the full history already lives in the Sync Log.
+
+712 assertions across 13 suites. `t13` grew from 87 to 148: the retry-with-a-fresh-uuid that
+started this, partial-then-the-rest, over-asking capped at what is left, two lines of one
+submission racing each other, a lot from another receipt in the same bin, the same uuid answered
+from the ledger, a corrupt ledger, an unreadable receipt, the `record.load` fallback, a
+non-tracked item, and the ledger write failing out loud.

@@ -241,7 +241,11 @@ define(['N/search', 'N/record'],
       //    Transaction guide's (§7.8.1). Two names because a warehouse looking
       //    for "why is that bin empty" and one looking for "why can the
       //    operator not see that PO" are two different searches.
-      BIN_QUERY: 'Bin Query', TXN_FETCH: 'Transaction Fetch'
+      BIN_QUERY: 'Bin Query', TXN_FETCH: 'Transaction Fetch',
+      // The release of held stock. Already a value in
+      // customlist_jj_rb_sync_type from the first build; this is the code
+      // behind it.
+      INV_RELEASE: 'Inventory Release'
     });
     const OPERATION = Object.freeze({
       CREATE: 'Create', UPDATE: 'Update', DELETE: 'Delete',
@@ -250,7 +254,12 @@ define(['N/search', 'N/record'],
       //    cancel alike — both mean "this order will not go any further".
       //    `Void` is the destructive one, and only a NetSuite DELETE or the
       //    Delete close action reaches it.
-      CLOSE: 'Close', VOID: 'Void'
+      CLOSE: 'Close', VOID: 'Void',
+      // §11.6 — held stock moving to a good bin. Its own operation because a
+      // release is neither a create of the subject record nor an update of
+      // it: the subject is the Item Receipt and what gets created is a
+      // separate Bin Transfer. Already a value in customlist_jj_rb_operation.
+      RELEASE: 'Release'
     });
     const REASON = Object.freeze({
       NEVER_SYNCED: 'Never synced', PAYLOAD_CHANGED: 'Payload changed since last sync',
@@ -433,10 +442,15 @@ define(['N/search', 'N/record'],
       // Strictly 1 -> 2 -> 3, each narrowing the last.
       BINS_FOR_LOCATION: 'bins_for_location',
       BIN_CONTENTS: 'bin_contents',
-      ITEM_AVAILABILITY: 'item_availability'
+      ITEM_AVAILABILITY: 'item_availability',
 
-      // STILL NOT BUILT, and absent rather than declared-and-dead:
-      //   inventory_release (§11.6)
+      // ── THE LAST STEP OF A RECEIPT — jj_rl_rb_write.js, §11.6 / Design §9.
+      //    TrackTrace verifies what was received; the Middleware says which
+      //    lots passed; NetSuite moves exactly those out of the on-hold bin.
+      //    It is a WRITE, and it creates a Bin Transfer - never an Inventory
+      //    Status Change. There is no InventoryStatusChange anywhere in this
+      //    SuiteApp (Design v3.1 §9.2.1).
+      INV_RELEASE: 'inventory_release'
     });
 
     /**
@@ -458,7 +472,30 @@ define(['N/search', 'N/record'],
       BIN_INVALID_LOCATION: 'BIN_INVALID_LOCATION',
       UOM_NOT_CONVERTIBLE: 'UOM_NOT_CONVERTIBLE',
       INVENTORY_DETAIL_MISSING: 'INVENTORY_DETAIL_MISSING',
-      INSUFFICIENT_STOCK: 'INSUFFICIENT_STOCK'          // fulfilment only
+      INSUFFICIENT_STOCK: 'INSUFFICIENT_STOCK',         // fulfilment only
+      // ── INVENTORY RELEASE — §11.6. Four failures, and they are four
+      //    different conversations with the warehouse.
+      // The lot name on the payload is not a lot of that item at all.
+      LOT_NOT_FOUND: 'LOT_NOT_FOUND',
+      // The lot exists, but none of it is in the bin the release names. Most
+      // often somebody moved it by hand. The release must NOT guess where it
+      // went - Design v3.1 §9.4.
+      LOT_NOT_IN_BIN: 'LOT_NOT_IN_BIN',
+      // Some of it is there, not all of it.
+      QTY_EXCEEDS_IN_BIN: 'QTY_EXCEEDS_IN_BIN',
+      // No bin to move from, or none to move to, in the payload OR in
+      // configuration. Blank in both places is a configuration error.
+      BIN_NOT_CONFIGURED: 'BIN_NOT_CONFIGURED',
+      // ── THE LEDGER'S OWN REFUSALS. These are the ones that stop a second
+      //    release moving stock a first release already moved.
+      // The lot is not one THIS RECEIPT received. It may be perfectly real
+      // and sitting in the same hold bin - put there by another receipt.
+      LOT_NOT_ON_RECEIPT: 'LOT_NOT_ON_RECEIPT',
+      // Everything this receipt received of that lot has already been
+      // released. The commonest shape of a duplicate call.
+      ALREADY_RELEASED: 'ALREADY_RELEASED',
+      // Some of it is still releasable, but not as much as was asked for.
+      QTY_EXCEEDS_RECEIVED: 'QTY_EXCEEDS_RECEIVED'
     });
 
     /** DOCUMENT-level error codes — a failure that is not about one line. */
@@ -477,7 +514,19 @@ define(['N/search', 'N/record'],
       LINE_VALIDATION_FAILED: 'LINE_VALIDATION_FAILED',
       DUPLICATE_IDENTIFIER: 'DUPLICATE_IDENTIFIER',
       RECORD_NOT_FOUND: 'RECORD_NOT_FOUND',
-      SAVE_REFUSED: 'SAVE_REFUSED'
+      SAVE_REFUSED: 'SAVE_REFUSED',
+      // §11.6 — every line of the release was refused, so there is no Bin
+      // Transfer to create. Distinct from LINE_VALIDATION_FAILED on a
+      // receipt only in what it tells the operator to do next.
+      NOTHING_TO_RELEASE: 'NOTHING_TO_RELEASE',
+      // §11.6 — a release with no Item Receipt behind it. MANDATORY, because
+      // the receipt carries the ledger and without the ledger there is no
+      // duplicate guard worth the name. Design v3.1 §9.3 lists the receipt
+      // reference as mandatory for exactly this reason.
+      RECEIPT_NOT_IDENTIFIED: 'RECEIPT_NOT_IDENTIFIED',
+      // The receipt was found and its lines could not be read, so there is
+      // no entitlement to check a release against.
+      RECEIPT_NOT_READABLE: 'RECEIPT_NOT_READABLE'
     });
 
     /**
@@ -562,6 +611,45 @@ define(['N/search', 'N/record'],
       // features do not support. The answer is thinner than it looks.
       DEGRADED_READ: 'DEGRADED_READ'
     });
+
+    /**
+     * WHICH NOTES ARE WORTH A SYNC LOG ROW, AND WHICH ARE ONLY WORTH SAYING.
+     *
+     * A note in the envelope always reaches the caller. A Sync Log ROW is a
+     * different claim: somebody in this account has to do something. Writing
+     * one for every note puts a scanning device's ordinary browsing on the
+     * reconciliation page, which is what the last three passes were spent
+     * taking off it.
+     *
+     * -- A ROW, AND AN OPEN ONE ---------------------------------------------
+     *
+     *   LINES_NOT_SCANNABLE  an ELIGIBLE item on a live order has no product
+     *                        UUID for the unit the line is in. The device is
+     *                        refused at submit with the goods on the dock.
+     *                        Nobody outside NetSuite can fix it: a UOM Detail
+     *                        row has to be added, or a Units Type corrected.
+     *   DEGRADED_READ        a configured field is not deployed, or a join the
+     *                        account's features do not support. The answer is
+     *                        thinner than it looks and an administrator has to
+     *                        make it whole.
+     *
+     * -- NO ROW. The envelope's note is the whole answer ---------------------
+     *
+     *   RESULT_TRUNCATED     the caller asked for more than a page. It pages.
+     *   NO_SCANNABLE_LINES   the order has no item line. That is the order,
+     *                        not a fault in this account.
+     *   UNFILTERED_LIST      the caller omitted the location filter. The
+     *                        caller is the one who can add it.
+     *
+     * NON-ELIGIBLE ITEMS NEVER REACH HERE. An item that is not eligible is
+     * never sent to TrackTraceRX, so it has no product UUID BY DESIGN and a
+     * missing one is not a finding. `fetch_transaction` counts only eligible
+     * lines towards LINES_NOT_SCANNABLE and reports no missing-UUID reason on
+     * the others at all.
+     */
+    const READ_NOTE_REVIEW = Object.freeze([
+      'LINES_NOT_SCANNABLE', 'DEGRADED_READ'
+    ]);
 
     /**
      * READ REFUSALS THAT ARE EXPECTED, AND THEREFORE WRITE NO SYNC LOG ROW.
@@ -698,7 +786,80 @@ define(['N/search', 'N/record'],
       requestUuid: 'custbody_jj_rb_request_uuid',
       origin: 'custbody_jj_rb_origin',
       allSerial: 'custbody_jj_rb_all_serial',
-      containsNonSerial: 'custbody_jj_rb_contains_nonserial'
+      containsNonSerial: 'custbody_jj_rb_contains_nonserial',
+      // ── THE RELEASE STAMP — Design v3.1 §9.9, on the ITEM RECEIPT only.
+      //    A receipt whose stock is never released is invisible unless
+      //    somebody looks for it: no call failed and nothing errored, the
+      //    stock just sits in the on-hold bin until a picker finds the good
+      //    bin empty. These three are what the "received but not released"
+      //    worklist is built on (§9.12).
+      releasedQty: 'custbody_jj_rb_released_qty',
+      heldQty: 'custbody_jj_rb_held_qty',
+      releasedAt: 'custbody_jj_rb_released_at',
+      // The Bin Transfer that did it. TEXT, holding the internal id, not a
+      // List/Record link: a transaction link field would have to name a
+      // record type, and the useful answer here is one id a user can paste.
+      binTransfer: 'custbody_jj_rb_bin_transfer',
+      // ══ THE RELEASE LEDGER ════════════════════════════════════════════
+      //
+      // Long Text on the ITEM RECEIPT holding a JSON record of what this
+      // receipt received per lot and how much of it has been released, call
+      // by call. IT IS THE AUTHORITY ON WHAT MAY STILL MOVE.
+      //
+      // WHY A LEDGER AND NOT THE STOCK ITSELF. Neither of the two obvious
+      // guards is sufficient:
+      //
+      //   request_uuid in externalId  catches a RESEND of the SAME call. It
+      //                               does not catch a second call, with a
+      //                               fresh uuid, for the same lot - which
+      //                               is what a Middleware retry after a
+      //                               timeout actually looks like.
+      //
+      //   the on-hold bin's balance   is SHARED. Several receipts put stock
+      //                               in one hold bin, so a balance of 24
+      //                               says nothing about WHOSE 24 it is, and
+      //                               a second release would happily move
+      //                               another receipt's goods. It also lags:
+      //                               `inventorybalance` is a search index,
+      //                               and a release called seconds after its
+      //                               receipt can read a stale number.
+      //
+      // The ledger has neither problem. It is per receipt, it is written in
+      // the same breath as the transfer, and a stored field is read back
+      // immediately and exactly.
+      //
+      // SHAPE - short keys, because this is stored on every receipt:
+      //
+      //   { "v": 1, "receipt": "2481003", "seq": 3,
+      //     "updated": "2026-10-05T10:11:12.000Z",
+      //     "lots": {
+      //       "718|901": { "item":"718", "lot":"LOT-2026-0815", "lotId":"901",
+      //                    "received":24, "released":20 }
+      //     },
+      //     "calls": [
+      //       { "uuid":"f7c1...", "bt":"2492118",
+      //         "at":"2026-10-05T10:11:12.000Z",
+      //         "moved":[{ "k":"718|901", "q":20 }] }
+      //     ],
+      //     "callCount": 3 }
+      //
+      // `calls` is capped - see RELEASE_LEDGER. `lots` and `callCount` are
+      // not, because they are the running totals and losing them loses the
+      // guard.
+      releaseLog: 'custbody_jj_rb_release_log'
+    });
+
+    /**
+     * Ledger housekeeping. One place, because both the writer and anything
+     * that later reads the field has to agree.
+     */
+    const RELEASE_LEDGER = Object.freeze({
+      VERSION: 1,
+      // How many individual calls are kept in `calls`. The cumulative figures
+      // in `lots` are never trimmed, so trimming history costs traceability
+      // in the Sync Log's direction - where the full record already lives -
+      // and nothing in the duplicate guard.
+      MAX_CALLS: 50
     });
 
     /** The transaction column fields. The line filter has to be visible on the line. */
@@ -1124,7 +1285,8 @@ define(['N/search', 'N/record'],
       TXN, LINE, TXNMAP, TOKENS, BASE_UNIT, ORIGIN_NS,
       TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
       // reads
-      READ_ERR, READ_NOTE, READ_EXPECTED, READ_PAGE, LOG_REASON
+      READ_ERR, READ_NOTE, READ_NOTE_REVIEW, READ_EXPECTED, READ_PAGE, LOG_REASON,
+      RELEASE_LEDGER
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1610,8 +1772,6 @@ define(['N/search', 'N/record'],
         if (t && typeIds.indexOf(t) === -1) typeIds.push(t);
       });
 
-      log.debug("RB loadUnits — typeIds", typeIds);
-
       // ONE MAP PER TYPE, ONE OBJECT PER UNIT.
       //
       //   byType['1'] = { '23': pallet, 'PALLET': pallet, 'PF': pallet, … }
@@ -1678,8 +1838,6 @@ define(['N/search', 'N/record'],
             if (k && !byType[tid][k]) byType[tid][k] = unit;
           });
         }
-
-        log.debug("RB loadUnits — byType", byType);
       });
 
       return {

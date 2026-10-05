@@ -28,15 +28,28 @@
  *                             one shipment may cover several orders, so several
  *                             documents share it - it is NOT checked for
  *                             uniqueness. request_uuid remains the duplicate guard.
- * - Rejects the WHOLE submission when any line fails validation, so nothing is
- *   created and a retry can always repair it.
  * - Guards duplicates on the record's native externalId, which the platform
  *   enforces per record type. A repeat submission answers with the record that
  *   already exists, as a SUCCESS.
  * - Lands receipt stock in the location's on-hold bin, falling back to the
  *   configured default bin.
- * - Writes one closed Sync Log row per call, Direction "Inbound (MW - NS)",
- *   Trigger "Inbound Call".
+ * - inventory_release (POST) - the last step of a receipt. TrackTrace verifies
+ *                             the EPCIS data; the Middleware names the lots that
+ *                             passed; this creates a BIN TRANSFER moving exactly
+ *                             those out of the on-hold bin into a good bin. The
+ *                             lot arrives BY NAME and is resolved against the
+ *                             item's own on-hand inventory numbers. Never an
+ *                             Inventory Status Change - there is none in this
+ *                             SuiteApp.
+ *                             Guarded by a RELEASE LEDGER on the receipt
+ *                             (custbody_jj_rb_release_log) holding received and
+ *                             released per lot, so a retry with a fresh
+ *                             request_uuid cannot move the same stock twice.
+ * - Rejects the WHOLE submission when any line fails validation, so nothing is
+ *   created and a retry can always repair it.
+ * - Writes one Sync Log row per call, Direction "Inbound (MW - NS)",
+ *   Trigger "Inbound Call". Closed on a clean call; OPEN on a PARTIAL release,
+ *   because stock left in the on-hold bin surfaces nowhere else.
  *
  * Trigger Type:
  * - RESTlet. POST and PUT. Invoked by the RapidBridge Middleware only.
@@ -56,6 +69,18 @@
  * REVISION HISTORY
  * @version 1.0  29-Sep-2026  Initial build - inbound write API (item_receipt,
  *                            item_fulfillment, identifier)
+ * @version 1.1  05-Oct-2026  inventory_release - the Bin Transfer (§11.6). Lot
+ *                            resolved BY NAME against on-hand inventory numbers,
+ *                            and the stock must still be in the on-hold bin or
+ *                            the release is refused rather than redirected.
+ * @version 1.2  05-Oct-2026  THE RELEASE LEDGER. v1.1 could be made to move the
+ *                            same lot twice by a retry carrying a fresh
+ *                            request_uuid: the externalId guard saw a different
+ *                            id, and the on-hold bin's balance is shared between
+ *                            receipts and lags behind the index. The receipt now
+ *                            carries received-and-released per lot in a Long Text
+ *                            JSON field and that is the authority. The Item
+ *                            Receipt reference became MANDATORY as a result.
  *
  * COPYRIGHT © 2024 Jobin & Jismi.
  * All rights reserved. This script is a proprietary product of Jobin & Jismi IT Services LLP and is protected by copyright
@@ -88,9 +113,23 @@
  * field of the transformed receipt or fulfilment. The read endpoint takes it off
  * a transform for exactly this reason, so the key always round-trips.
  *
- * NOT BUILT ANYWHERE YET, and absent rather than declared-and-dead:
- * `inventory_release` (§11.6). `inventory_adjustment` is OUT OF SCOPE (§1.5.3)
- * and must not be added.
+ * 3. A RELEASE MOVES STOCK THAT ALREADY EXISTS. `inventory_release` never
+ *    creates a lot and never redirects a transfer. A lot name that resolves to
+ *    nothing is LOT_NOT_FOUND; stock that is no longer in the on-hold bin is
+ *    LOT_NOT_IN_BIN. Both refuse. Guessing where the stock went is how a
+ *    regulated product is released from a bin nobody verified - Design §9.4.
+ *
+ * 4. THE RECEIPT'S LEDGER IS THE AUTHORITY ON WHAT MAY STILL MOVE. Rule 2's
+ *    externalId guard answers "is this the SAME call again?". It does not
+ *    answer "has this stock already been released?", and those are different
+ *    questions the moment a retry carries a fresh request_uuid. The on-hold
+ *    bin cannot answer the second one either: several receipts share it, so
+ *    its balance is not this receipt's, and it is a search index that lags.
+ *    `custbody_jj_rb_release_log` holds received and released PER LOT for the
+ *    receipt, it is written in the same breath as the transfer, and every
+ *    release is measured against it. Without it the release is refused.
+ *
+ * `inventory_adjustment` is OUT OF SCOPE (§1.5.3) and must not be added.
  *
  * ON THE NAME. `_api` distinguishes nothing now that there are two RESTlets -
  * both are APIs. Master Data Guide v3.3 §7.14 named it `_api` rather than
@@ -251,11 +290,18 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         if (operation === C.INBOUND.IDENTIFIER)
           return storeIdentifier(body, cfg, startedAt);
 
+        // §11.6 — the last step of a receipt. It creates a Bin Transfer, not
+        // a document transformed from an order, so it is NOT in INBOUND_MAP:
+        // nothing in that table describes it.
+        if (operation === C.INBOUND.INV_RELEASE)
+          return releaseInventory(body, cfg, startedAt);
+
         const map = INBOUND_MAP[operation];
         if (!map)
           return failEnvelope(C.DOC_ERR.UNKNOWN_OPERATION,
             'Unknown operation "' + operation + '". This endpoint accepts: ' +
-            Object.keys(INBOUND_MAP).concat([C.INBOUND.IDENTIFIER]).join(', ') + '.');
+            Object.keys(INBOUND_MAP)
+              .concat([C.INBOUND.IDENTIFIER, C.INBOUND.INV_RELEASE]).join(', ') + '.');
 
         return createDocument(map, body, cfg, startedAt);
 
@@ -846,13 +892,1223 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       log.audit({
         title: 'RB inbound shipment identifier stored',
-        details: { recordType: recordType, internalId: internalId,
-          shipmentUuid: ttUuid }
+        details: {
+          recordType: recordType, internalId: internalId,
+          shipmentUuid: ttUuid
+        }
       });
       return okEnvelope({
         internal_id: internalId, external_id: requestUuid,
         shipment_uuid: ttUuid
       });
+    };
+
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // inventory_release — the Bin Transfer. §11.6, Design v3.1 §9
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * THE LAST STEP OF EVERY RECEIPT.
+     *
+     * Received serialized stock has not yet been proved genuine. The receipt
+     * put it in the location's ON-HOLD BIN. TrackTrace then verifies the EPCIS
+     * data, the Middleware decides which lots passed and have no damage, and
+     * it calls this. NetSuite moves exactly those lots to a GOOD BIN.
+     *
+     * ── WHAT THIS IS NOT ──────────────────────────────────────────────────
+     *
+     * It is NOT an Inventory Status Change. The meeting of 8 September settled
+     * that inventory state is represented by PHYSICAL BINS, because bin
+     * management is already a prerequisite of this integration and Inventory
+     * Status is a separate feature not every account has - Design v3.1 §9.2.1.
+     * There is no InventoryStatusChange anywhere in this SuiteApp.
+     *
+     * ── THE ONE THING TO TELL THE CLIENT ──────────────────────────────────
+     *
+     * A BIN DOES NOT MAKE STOCK UNAVAILABLE. NetSuite will commit stock
+     * sitting in the on-hold bin: the quantity is on hand at that location, so
+     * the availability calculation includes it. The on-hold bin buys PROCESS
+     * control - a picker directed to good bins does not take from it - not
+     * SYSTEM control. Design §9.4.1, carried as T-32.
+     *
+     * ── THE LOT ARRIVES BY NAME ───────────────────────────────────────────
+     *
+     * The Middleware knows lots as TrackTrace spells them - "LOT-2026-0815" -
+     * and not as NetSuite internal ids. Every name is resolved against the
+     * item's own on-hand inventory numbers. A name that resolves to nothing is
+     * LOT_NOT_FOUND and the release refuses; it never creates a lot, because a
+     * release moves stock that already exists and a lot invented here would be
+     * a zero-quantity record nobody asked for.
+     *
+     * ── AND IT MUST STILL BE WHERE THE RECEIPT PUT IT ─────────────────────
+     *
+     * Every line is checked against `inventorybalance` for item + location +
+     * from-bin + lot. If somebody moved the stock by hand, the release is
+     * REFUSED rather than redirected: guessing where it went is how a
+     * regulated product ends up released from a bin nobody verified.
+     */
+    const releaseInventory = (body, cfg, startedAt) => {
+      const requestUuid = String(body.request_uuid || '').trim();
+      const entry = {
+        key: 'REL', syncType: C.SYNCTYPE.INV_RELEASE,
+        logSubjectField: C.LOG.transaction, fields: TXN
+      };
+      const unitFromReceipt = (id) => ({
+        recordType: 'itemreceipt', recordId: String(id || ''),
+        uomId: null, storedUuid: '', storedPayload: '', storedSynced: false,
+        data: {}, subjectDeleted: !id,
+        uuidField: TXN.uuid, payloadField: TXN.payload, syncedField: TXN.synced,
+        lastSyncField: TXN.lastSync, lastTryField: TXN.lastTry,
+        tryResultField: TXN.tryResult, errorField: TXN.error
+      });
+
+      const refuse = (code, message, failedLines, receiptId) => {
+        logIo.recordInbound({
+          entry: entry, unit: unitFromReceipt(receiptId), cfg: cfg,
+          operation: C.OPERATION.RELEASE, outcome: C.OUTCOME.FAILURE,
+          status: C.STATUS.OPEN_REVIEW, reason: C.REASON.AWAITING_DECISION,
+          errorClass: C.ERRCLASS.BUSINESS, errorCode: code,
+          errorMessage: message,
+          endpoint: 'REL ' + body.operation, method: 'POST',
+          httpStatus: 400, startedAt: startedAt,
+          requestUuid: requestUuid, shipmentUuid: body.shipment_uuid,
+          request: body,
+          response: failEnvelope(code, message, failedLines),
+          lineTotal: Array.isArray(body.lines) ? body.lines.length : 0,
+          lineSent: 0,
+          suggested: 'NOTHING MOVED. The stock is still in the on-hold bin, ' +
+            'which is the safe place for it. Correct the cause and resubmit ' +
+            'with a NEW request_uuid.'
+        });
+        return failEnvelope(code, message, failedLines);
+      };
+
+      // ── DOCUMENT CHECKS. All of them before anything is built.
+      if (cfg.irEnabled !== true)
+        return refuse(C.DOC_ERR.FLOW_DISABLED,
+          'The Item Receipt flow is switched off on the RapidBridge ' +
+          'Configuration record, and the release is its last step.');
+
+      if (!requestUuid)
+        return refuse(C.DOC_ERR.MISSING_REQUEST_UUID,
+          'No request_uuid was supplied. It is the duplicate guard and it is ' +
+          'mandatory: it becomes the Bin Transfer\'s NetSuite external id.');
+
+      // RULE 2, unchanged. A retry is answered with the transfer that already
+      // exists, and that is a SUCCESS. NO SECOND BIN TRANSFER - Design §9.8.
+      const already = findBinTransfer(requestUuid);
+      if (already) {
+        log.audit({
+          title: 'RB release duplicate request_uuid',
+          details: {
+            requestUuid: requestUuid, binTransfer: already,
+            note: 'Answered with the Bin Transfer that already exists. ' +
+              'Not an error, and nothing moved twice.'
+          }
+        });
+        return okEnvelope({
+          bin_transfer_internal_id: already, external_id: requestUuid,
+          duplicate: true
+        });
+      }
+
+      const lines = Array.isArray(body.lines) ? body.lines : null;
+      if (!lines || !lines.length)
+        return refuse(C.DOC_ERR.MALFORMED_PAYLOAD,
+          'The release carries no lines. A release that names nothing is not ' +
+          'an empty release; it is a caller that lost its payload.');
+
+      // ── THE ORDER. The release is about an order's receipt, and the order
+      //    is what the Middleware is holding - Design §9.3 asks for "the item
+      //    and line details for the order along with the order details".
+      const orderId = String(body.order_id || '').trim();
+      const order = orderId ? readOrder(INBOUND_MAP[C.INBOUND.IR_CREATE], orderId)
+        : { found: false };
+      if (orderId && !order.found)
+        return refuse(C.DOC_ERR.ORDER_NOT_FOUND,
+          'No purchase order with internal id ' + orderId + ' exists.');
+
+      // ── THE RECEIPT. MANDATORY, and it was not in v1.0.
+      //
+      //    The receipt carries the LEDGER, and the ledger is the only thing
+      //    that knows what this release has already moved. Without it a
+      //    second call with a fresh request_uuid moves the same lot again,
+      //    and the on-hold bin's balance cannot tell anybody otherwise
+      //    because several receipts share that bin. Design §9.3 lists the
+      //    receipt reference as mandatory; v1.0 treated it as optional and
+      //    that was the hole.
+      const receiptId = resolveReceipt(body, orderId);
+      if (!receiptId)
+        return refuse(C.DOC_ERR.RECEIPT_NOT_IDENTIFIED,
+          'No Item Receipt could be identified for this release. Send ' +
+          'item_receipt_internal_id, or a shipment_uuid that matches one. ' +
+          'The receipt holds the release ledger, and without it there is no ' +
+          'way to know what a previous call already moved - so the release ' +
+          'is refused rather than risking the same lot being moved twice.');
+
+      // ── THE LOCATION. A Bin Transfer CANNOT CROSS LOCATIONS, so there is
+      //    exactly one and everything must agree with it.
+      const locationId = String(body.location_id || order.locationId ||
+        receiptLocation(receiptId) || '').trim();
+      if (!locationId)
+        return refuse(C.DOC_ERR.MALFORMED_PAYLOAD,
+          'No location could be determined for this release. A Bin Transfer ' +
+          'is within one location and cannot be built without it. Send ' +
+          'location_id, or an order_id or item_receipt_internal_id that ' +
+          'carries one.', null, receiptId);
+
+      // ── THE TWO BINS. The payload wins; configuration answers otherwise.
+      //    Blank in both places is a configuration error, not a default.
+      const bins = releaseBins(body, order, locationId, cfg);
+
+      // ── THE LEDGER. One lookupFields, and it is the authority.
+      let ledger = readLedger(receiptId);
+      if (!ledger.lotCount) {
+        // First release against this receipt: seed the entitlements from what
+        // the receipt actually received. ONE read, ONCE in the receipt's life
+        // - every later release reads them back out of the stored JSON.
+        ledger = seedLedger(receiptId, ledger);
+        if (!ledger.lotCount)
+          return refuse(C.DOC_ERR.RECEIPT_NOT_READABLE,
+            'Item Receipt ' + receiptId + ' carries no lot detail that could ' +
+            'be read, so there is nothing to measure this release against. ' +
+            'A release is refused rather than guessed at.', null, receiptId);
+      }
+
+      // THE SECOND DUPLICATE GUARD, and the one that catches what externalId
+      // cannot: this exact request_uuid has already been applied to this
+      // receipt. Answered as a SUCCESS with what it did.
+      const applied = ledger.calls.filter((c) => c.uuid === requestUuid)[0];
+      if (applied) {
+        log.audit({
+          title: 'RB release request_uuid already in the receipt ledger',
+          details: {
+            receiptId: receiptId, requestUuid: requestUuid,
+            binTransfer: applied.bt || null
+          }
+        });
+        return okEnvelope({
+          bin_transfer_internal_id: applied.bt || '',
+          external_id: requestUuid, item_receipt_internal_id: receiptId,
+          duplicate: true,
+          released_quantity: ledgerReleased(ledger),
+          held_quantity: ledgerHeld(ledger)
+        });
+      }
+
+      // ── THE REST OF THE PRE-READ. §17.4 rule 3: searches for the whole
+      //    submission, not per line. Lots first, because the balance search
+      //    needs the ids the names resolve to.
+      const items = readItems(lines);
+      const lots = readLotsByName(lines, items);
+      const balance = readHeldBalance(lines, locationId, bins);
+
+      // ── THE LINE LOOP. Collect, then decide. Rule 1 is the same here as on
+      //    a receipt: ONE Bin Transfer for the whole release or none at all.
+      //
+      //    `claimed` accumulates within THIS submission, so two lines naming
+      //    the same lot cannot each spend the whole remaining entitlement.
+      const claimed = {};
+      const failures = [];
+      const moves = [];
+      lines.forEach((ln) => {
+        try {
+          moves.push(validateRelease(ln, {
+            items: items, lots: lots, balance: balance, bins: bins,
+            ledger: ledger, claimed: claimed, receiptId: receiptId
+          }));
+        } catch (e) {
+          failures.push(lineFailure(ln, e));
+        }
+      });
+
+      if (failures.length)
+        return refuse(C.DOC_ERR.LINE_VALIDATION_FAILED,
+          failures.length + ' of ' + lines.length + ' release line(s) failed ' +
+          'validation, so NOTHING was moved. The stock is still in the ' +
+          'on-hold bin. Correct the cause and resubmit with a new ' +
+          'request_uuid.', failures, receiptId);
+
+      if (!moves.length)
+        return refuse(C.DOC_ERR.NOTHING_TO_RELEASE,
+          'Every line of the release resolved to zero quantity. Nothing to ' +
+          'transfer.', null, receiptId);
+
+      // ── BUILD AND SAVE.
+      let btId;
+      try {
+        btId = buildBinTransfer(moves, {
+          locationId: locationId, requestUuid: requestUuid,
+          date: body.transaction_date, memo: body.memo, items: items
+        });
+      } catch (e) {
+        const message = (e && e.message) ? e.message : String(e);
+        const code = /period/i.test(message)
+          ? C.DOC_ERR.PERIOD_LOCKED : C.DOC_ERR.SAVE_REFUSED;
+        return refuse(code, 'NetSuite refused the Bin Transfer: ' + message,
+          null, receiptId);
+      }
+
+      // ── POST THE LEDGER. Re-read, merge, write - never write back the copy
+      //    read before the save. See commitLedger.
+      const posted = commitLedger(receiptId, requestUuid, btId, moves, ledger);
+      const released = posted.released;
+      const held = posted.held;
+
+      logIo.recordInbound({
+        entry: entry, unit: unitFromReceipt(receiptId), cfg: cfg,
+        operation: C.OPERATION.RELEASE,
+        outcome: posted.overRelease ? C.OUTCOME.FAILURE : C.OUTCOME.SUCCESS,
+        // ── CLOSED ONLY WHEN THE RECEIPT IS FULLY RELEASED ────────────────
+        //    A PARTIAL release is normal, not a fault - some serials pass and
+        //    some do not. But it is also the state that goes unnoticed: no
+        //    call failed, and the remainder sits in the on-hold bin until a
+        //    picker finds the good bin short. An open row is the only thing
+        //    that surfaces it before the warehouse does. Design §9.12.
+        status: (held > 0 || posted.overRelease)
+          ? C.STATUS.OPEN_REVIEW : C.STATUS.CLOSED_SUCCESS,
+        reason: (held > 0 || posted.overRelease)
+          ? C.REASON.AWAITING_DECISION : null,
+        errorClass: posted.overRelease ? C.ERRCLASS.BUSINESS : null,
+        errorCode: posted.overRelease ? C.LINE_ERR.QTY_EXCEEDS_RECEIVED : null,
+        errorMessage: posted.overRelease ? posted.conflictNote : null,
+        endpoint: 'REL ' + body.operation, method: 'POST',
+        httpStatus: 200, startedAt: startedAt,
+        requestUuid: requestUuid, shipmentUuid: body.shipment_uuid,
+        request: body, lineTotal: lines.length, lineSent: moves.length,
+        suggested: posted.overRelease
+          ? posted.conflictNote
+          : (held > 0
+            ? 'PARTIAL RELEASE. ' + released + ' of ' + posted.received +
+            ' received has now been released; ' + held + ' is still in the ' +
+            'on-hold bin. That remainder is either awaiting a later ' +
+            'verification or it failed one. It will not move on its own - ' +
+            'somebody resolves it, and this row is how it is found.'
+            : null)
+      });
+
+      log.audit({
+        title: 'RB release created Bin Transfer ' + btId,
+        details: {
+          orderId: orderId || null, receiptId: receiptId,
+          locationId: locationId, fromBin: bins.from, toBin: bins.to,
+          lines: moves.length, movedNow: posted.movedNow,
+          releasedTotal: released, held: held,
+          ledgerWritten: posted.written, overRelease: posted.overRelease
+        }
+      });
+
+      return okEnvelope({
+        bin_transfer_internal_id: btId,
+        external_id: requestUuid,
+        item_receipt_internal_id: receiptId,
+        order_id: orderId || '',
+        location_id: locationId,
+        from_bin: bins.from, to_bin: bins.to,
+        // THIS CALL moved this much.
+        moved_quantity: posted.movedNow,
+        // THE RECEIPT stands at this, cumulatively. The two differ on every
+        // call after the first, and reporting only one of them is what made
+        // a second release look reasonable.
+        released_quantity: released,
+        held_quantity: held,
+        received_quantity: posted.received,
+        fully_released: held === 0,
+        lines_released: moves.map((m) => ({
+          line_unique_key: m.lineKey,
+          item_id: m.itemId,
+          lot: m.lotName,
+          lot_internal_id: m.lotId,
+          quantity: m.quantity,
+          released_to_date: posted.perLot[m.key] === undefined
+            ? m.quantity : posted.perLot[m.key],
+          received: m.received,
+          from_bin: m.fromBin, to_bin: m.toBin
+        }))
+      });
+    };
+
+    /** The Bin Transfer already carrying this request_uuid, if there is one. */
+    const findBinTransfer = (requestUuid) => {
+      if (!requestUuid) return '';
+      let id = '';
+      try {
+        search.create({
+          type: 'bintransfer',
+          filters: [['externalid', 'is', requestUuid]],
+          columns: ['internalid']
+        }).run().each((r) => { id = String(r.id); return false; });
+      } catch (e) {
+        log.error('Error @ release findBinTransfer', e);
+      }
+      return id;
+    };
+
+    /**
+     * Which receipt this release is about.
+     *
+     * Named outright, or the receipt created from this order that carries the
+     * shipment identifier. NOT guessed from the order alone: one order can be
+     * received more than once, and stamping the wrong receipt is worse than
+     * stamping none.
+     */
+    const resolveReceipt = (body, orderId) => {
+      const named = String(body.item_receipt_internal_id ||
+        body.receipt_internal_id || '').trim();
+      if (named) return named;
+
+      const shipment = String(body.shipment_uuid || '').trim();
+      if (!shipment) return '';
+
+      let id = '';
+      try {
+        const filters = [['mainline', 'is', 'T'], 'AND',
+        [TXN.shipmentUuid, 'is', shipment]];
+        if (orderId) filters.push('AND', ['createdfrom', 'anyof', orderId]);
+        search.create({
+          type: 'itemreceipt', filters: filters,
+          columns: [search.createColumn({ name: 'internalid', sort: search.Sort.DESC })]
+        }).run().each((r) => { id = String(r.id); return false; });
+      } catch (e) {
+        log.audit({
+          title: 'RB release — receipt could not be found by shipment uuid',
+          details: (e && e.message) || String(e)
+        });
+      }
+      return id;
+    };
+
+    /** The receipt's own location, when nothing else named one. */
+    const receiptLocation = (receiptId) => {
+      if (!receiptId) return '';
+      try {
+        const v = search.lookupFields({
+          type: 'itemreceipt', id: receiptId, columns: ['location']
+        });
+        return textOf(v.location);
+      } catch (e) { return ''; }
+    };
+
+    /**
+     * The two bins, each resolved once for the whole release.
+     *
+     * A line may still override either. The order of preference is the same
+     * both ways: THE PAYLOAD, then the LOCATION's configured bin, then the
+     * RapidBridge Configuration's default. Blank at the end of that is a
+     * configuration error and the line says so - Design §9.4.
+     */
+    const releaseBins = (body, order, locationId, cfg) => {
+      const out = {
+        from: String(body.from_bin || body.from_bin_id || '').trim(),
+        to: String(body.to_bin || body.to_bin_id || '').trim()
+      };
+      if (out.from && out.to) return out;
+
+      let locHold = String(order.holdBin || '');
+      let locGood = '';
+      try {
+        const L = C.MASTER.location.fields;
+        const lv = search.lookupFields({
+          type: 'location', id: locationId, columns: [L.holdBin, L.goodBin]
+        });
+        locHold = locHold || textOf(lv[L.holdBin]);
+        locGood = textOf(lv[L.goodBin]);
+      } catch (e) { /* the fields are not deployed; the config default answers */ }
+
+      if (!out.from) out.from = locHold || String(cfg.defaultBin || '');
+      if (!out.to) out.to = locGood;
+      return out;
+    };
+
+    /**
+     * EVERY LOT NAME ON THE SUBMISSION, RESOLVED IN ONE SEARCH.
+     *
+     * A transaction line stores a lot as an internal id; the Middleware knows
+     * it as the name TrackTrace printed. The bridge is `inventorynumber`,
+     * filtered by the ITEMS on this release and by having stock - a lot with
+     * nothing on hand cannot be what is being released, and excluding it keeps
+     * the result set to what a warehouse actually holds.
+     *
+     * Matched case-insensitively and trimmed, because a scanner and a label
+     * printer disagree about case more often than they agree.
+     *
+     * Keyed per ITEM, deliberately. Two items may legitimately use the same
+     * lot name, and releasing item A's stock because item B has a lot of that
+     * name is exactly the class of mistake this integration exists to prevent.
+     */
+    const readLotsByName = (lines, items) => {
+      const byItem = {};
+      const itemIds = [];
+      const seen = {};
+      lines.forEach((l) => {
+        const id = String(l.item_id || '');
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        itemIds.push(id);
+      });
+      if (!itemIds.length) return byItem;
+
+      try {
+        search.create({
+          type: 'inventorynumber',
+          filters: [['item', 'anyof', itemIds], 'AND',
+          ['quantityonhand', 'greaterthan', 0]],
+          columns: ['internalid', 'inventorynumber', 'item', 'expirationdate']
+        }).run().each((r) => {
+          const itemId = String(r.getValue('item') || '');
+          const name = String(r.getValue('inventorynumber') || '');
+          if (!itemId || !name) return true;
+          byItem[itemId] = byItem[itemId] || {};
+          byItem[itemId][lotKey(name)] = {
+            id: String(r.getValue('internalid') || r.id),
+            name: name,
+            expiry: textOf(r.getValue('expirationdate'))
+          };
+          return true;
+        });
+      } catch (e) {
+        log.error('Error @ release readLotsByName', e);
+      }
+      return byItem;
+    };
+
+    /** A lot name reduced to a comparison key. Case and padding fall away. */
+    const lotKey = (v) => String(v === null || v === undefined ? '' : v)
+      .trim().toUpperCase();
+
+    /**
+     * WHAT IS ACTUALLY IN THE ON-HOLD BIN, per item and lot. ONE search.
+     *
+     * `inventorybalance` is the only search that is bin-aware AND lot-aware at
+     * once, which is exactly the question a release asks. Everything else -
+     * the item's own quantity fields, the receipt's lines - answers a
+     * different question and would let a release move stock that is not there.
+     */
+    const readHeldBalance = (lines, locationId, bins) => {
+      const out = { rows: {}, indexed: false };
+      const itemIds = [];
+      const binIds = [];
+      const seen = {};
+      lines.forEach((l) => {
+        const id = String(l.item_id || '');
+        if (id && !seen['i' + id]) { seen['i' + id] = true; itemIds.push(id); }
+        const b = String(l.from_bin || l.from_bin_id || bins.from || '');
+        if (b && !seen['b' + b]) { seen['b' + b] = true; binIds.push(b); }
+      });
+      if (!itemIds.length || !binIds.length || !locationId) return out;
+
+      const S = search.Summary;
+      try {
+        search.create({
+          type: 'inventorybalance',
+          filters: [['location', 'anyof', locationId], 'AND',
+          ['item', 'anyof', itemIds], 'AND',
+          ['binnumber', 'anyof', binIds]],
+          columns: [
+            search.createColumn({ name: 'item', summary: S.GROUP }),
+            search.createColumn({ name: 'binnumber', summary: S.GROUP }),
+            search.createColumn({ name: 'inventorynumber', summary: S.GROUP }),
+            search.createColumn({ name: 'onhand', summary: S.SUM })
+          ]
+        }).run().each((r) => {
+          out.indexed = true;
+          const key = balanceKey(
+            r.getValue({ name: 'item', summary: S.GROUP }),
+            r.getValue({ name: 'binnumber', summary: S.GROUP }),
+            r.getValue({ name: 'inventorynumber', summary: S.GROUP }));
+          out.rows[key] = (out.rows[key] || 0) +
+            (Number(r.getValue({ name: 'onhand', summary: S.SUM })) || 0);
+          return true;
+        });
+      } catch (e) {
+        log.error('Error @ release readHeldBalance', e);
+      }
+      if (!out.indexed)
+        log.audit({
+          title: 'RB release — the on-hold bin reads as EMPTY',
+          details: {
+            locationId: locationId, bins: binIds, items: itemIds,
+            effect: 'Treated as a SEARCH INDEX that has not caught up, not ' +
+              'as missing stock. `inventorybalance` is an index and a ' +
+              'release called seconds after its receipt can read nothing at ' +
+              'all. The ledger is the authority on what may move; the ' +
+              'balance only adds "and it is still physically there", which ' +
+              'cannot be asserted either way from an empty result.'
+          }
+        });
+      return out;
+    };
+
+    const balanceKey = (itemId, binId, lotId) =>
+      String(itemId || '') + '|' + String(binId || '') + '|' + String(lotId || '');
+
+    /**
+     * One release line, validated into one move. THROWS a C.LINE_ERR.
+     *
+     * Nothing here is forgiving, and that is deliberate. A release says "this
+     * stock passed verification and may be picked". Every shortcut taken at
+     * this point is a shortcut taken on a regulated product.
+     */
+    const validateRelease = (ln, ctx) => {
+      const key = ln.line_unique_key === undefined ? '' : String(ln.line_unique_key);
+      const itemId = String(ln.item_id || '').trim();
+      const info = ctx.items[itemId] || {};
+
+      if (!itemId)
+        throw err(C.LINE_ERR.ITEM_NOT_FOUND,
+          'Release line ' + key + ' names no item.');
+      if (!ctx.items[itemId])
+        throw err(C.LINE_ERR.ITEM_NOT_FOUND,
+          'Release line ' + key + ' names item ' + itemId +
+          ', which does not exist in this account.');
+      if (info.inactive)
+        throw err(C.LINE_ERR.ITEM_INACTIVE,
+          'Item ' + txn.named(info.name, itemId) + ' is inactive.');
+
+      const qty = Number(ln.quantity);
+      if (!(qty > 0))
+        throw err(C.LINE_ERR.BAD_QUANTITY,
+          'Release line ' + key + ' has quantity "' + ln.quantity + '".');
+
+      const fromBin = String(ln.from_bin || ln.from_bin_id || ctx.bins.from || '').trim();
+      const toBin = String(ln.to_bin || ln.to_bin_id || ctx.bins.to || '').trim();
+      if (!fromBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' names no from_bin, and no on-hold bin is ' +
+          'set on the location or the RapidBridge Configuration. There is ' +
+          'nothing to move the stock out of.');
+      if (!toBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' names no to_bin, and no good bin is set ' +
+          'on the location. Blank in the payload AND in configuration is a ' +
+          'configuration error, not a default.');
+      if (fromBin === toBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' moves stock from bin ' + fromBin +
+          ' to the same bin. A transfer that changes nothing is a ' +
+          'misconfiguration, not a no-op worth saving.');
+
+      // ── THE LOT. By NAME, which is the only thing the Middleware has.
+      const lotName = String(ln.lot || ln.lot_number || ln.lot_name || '').trim();
+      const tracked = info.isLot || info.isSerial;
+      let lot = null;
+
+      if (tracked) {
+        if (!lotName)
+          throw err(C.LINE_ERR.LOT_INVALID,
+            'Item ' + txn.named(info.name, itemId) + ' is lot or serial ' +
+            'tracked, so release line ' + key + ' must name the lot being ' +
+            'released. A release without one would move an arbitrary lot.');
+        lot = (ctx.lots[itemId] || {})[lotKey(lotName)] || null;
+        if (!lot) {
+          const offers = Object.keys(ctx.lots[itemId] || {}).length;
+          throw err(C.LINE_ERR.LOT_NOT_FOUND,
+            'Lot "' + lotName + '" is not an on-hand lot of ' +
+            txn.named(info.name, itemId) + '. ' +
+            (offers
+              ? 'That item has ' + offers + ' lot(s) with stock; this is not ' +
+              'one of them.'
+              : 'That item has no stock on hand at all.') +
+            ' The release does not create lots: it moves stock that already ' +
+            'exists, and a lot created here would be an empty record nobody ' +
+            'asked for.');
+        }
+      }
+
+      // ══ THE LEDGER. THE AUTHORITY ON WHAT MAY STILL MOVE. ═══════════════
+      //
+      // Everything above this point says the request is coherent. This says
+      // whether it has already been honoured - which is the question a
+      // RESEND asks, and the one neither externalId nor the bin's balance
+      // can answer.
+      const lk = lotLedgerKey(itemId, lot ? lot.id : '');
+      const row = ctx.ledger.lots[lk];
+      if (!row)
+        throw err(C.LINE_ERR.LOT_NOT_ON_RECEIPT,
+          (lot ? 'Lot "' + lot.name + '" of ' : '') +
+          txn.named(info.name, itemId) + ' is not something Item Receipt ' +
+          ctx.receiptId + ' received. It may be perfectly real and sitting in ' +
+          'bin ' + fromBin + ' - but it was put there by a DIFFERENT ' +
+          'receipt, and releasing it against this one would move somebody ' +
+          'else\'s goods. Several receipts share one on-hold bin.');
+
+      const already = Number(row.released) || 0;
+      const inThisCall = Number(ctx.claimed[lk]) || 0;
+      const received = Number(row.received) || 0;
+      const left = received - already - inThisCall;
+
+      if (left <= 0)
+        throw err(C.LINE_ERR.ALREADY_RELEASED,
+          'All ' + received + ' of ' +
+          (lot ? 'lot "' + lot.name + '" of ' : '') +
+          txn.named(info.name, itemId) + ' received on Item Receipt ' +
+          ctx.receiptId + ' has already been released' +
+          (inThisCall ? ' (' + inThisCall + ' of it earlier in THIS ' +
+            'submission)' : '') + '. This call would move it a second time. ' +
+          'If stock genuinely needs moving again, it is a bin transfer ' +
+          'somebody makes in NetSuite, not a release.');
+
+      if (qty > left)
+        throw err(C.LINE_ERR.QTY_EXCEEDS_RECEIVED,
+          'Release line ' + key + ' asks to move ' + qty + ' of ' +
+          (lot ? 'lot "' + lot.name + '", ' : '') +
+          txn.named(info.name, itemId) + ' but Item Receipt ' + ctx.receiptId +
+          ' received ' + received + ' and ' + (already + inThisCall) +
+          ' has already been released. ' + left + ' is still releasable.');
+
+      // ── AND IS IT STILL PHYSICALLY IN THE ON-HOLD BIN?
+      //
+      //    A SECOND check, not the primary one. The ledger says what MAY
+      //    move; this says whether it is still there to move. It is advisory
+      //    when the index has not caught up - see readHeldBalance - because
+      //    `inventorybalance` returning nothing at all is far more often a
+      //    stale index than a vanished pallet, and refusing a legitimate
+      //    release seconds after its receipt is the worse failure.
+      if (ctx.balance.indexed) {
+        const have = Number(
+          ctx.balance.rows[balanceKey(itemId, fromBin, lot ? lot.id : '')]) || 0;
+        if (!have)
+          throw err(C.LINE_ERR.LOT_NOT_IN_BIN,
+            (lot ? 'Lot "' + lot.name + '" of ' : '') +
+            txn.named(info.name, itemId) + ' has nothing on hand in bin ' +
+            fromBin + ', though Item Receipt ' + ctx.receiptId + ' still has ' +
+            left + ' of it unreleased. Somebody moved it by hand. The ' +
+            'release will not guess where it went - find it first.');
+        if (qty > have)
+          throw err(C.LINE_ERR.QTY_EXCEEDS_IN_BIN,
+            'Release line ' + key + ' asks to move ' + qty + ' of ' +
+            (lot ? 'lot "' + lot.name + '", ' : '') +
+            txn.named(info.name, itemId) + ' but bin ' + fromBin + ' holds ' +
+            have + '. Releasing more than is there is a discrepancy to ' +
+            'investigate, not a quantity to accept.');
+      }
+
+      ctx.claimed[lk] = inThisCall + qty;
+
+      return {
+        lineKey: key, key: lk, itemId: itemId, itemName: info.name || '',
+        lotId: lot ? lot.id : '', lotName: lot ? lot.name : (row.lot || ''),
+        quantity: qty, received: received, releasedBefore: already,
+        fromBin: fromBin, toBin: toBin
+      };
+    };
+
+    // heldAfter() AND movedFor() LIVED HERE AND ARE GONE.
+    //
+    // They measured what stayed behind by subtracting this call's moves from
+    // an `inventorybalance` read. Two things were wrong with that. The bin is
+    // SHARED, so the balance included other receipts' stock and the held
+    // figure was somebody else's. And the balance is a search INDEX, so a
+    // release called seconds after its receipt measured against a stale
+    // number. `ledgerHeld` answers from the receipt's own entitlements
+    // instead - exact, immediate, and about this receipt only.
+
+    /**
+     * ONE Bin Transfer for the whole release.
+     *
+     * Grouped by ITEM, because the `inventory` sublist carries one line per
+     * item and the lots hang off that line's inventory detail. Two lots of one
+     * item are two inventory ASSIGNMENTS on one sublist line, not two lines.
+     *
+     * ── THE BIN FIELDS, AND WHY THEY ARE SET TWICE ────────────────────────
+     *
+     * A Bin Transfer names its source and destination bins on the inventory
+     * ASSIGNMENT - `binnumber` and `tobinnumber`. On a non-tracked item with
+     * bins the same pair appears on the sublist LINE instead. The setters
+     * below are no-ops when a field is not on the form, so both are written
+     * and whichever the account's configuration exposes is the one that takes.
+     * This is the one thing in this handler that wants confirming on the first
+     * live run.
+     */
+    const buildBinTransfer = (moves, o) => {
+      const bt = record.create({ type: 'bintransfer', isDynamic: true });
+
+      // §4.1.2 — the duplicate guard, claimed before anything else.
+      try { bt.setValue({ fieldId: 'externalid', value: o.requestUuid }); }
+      catch (e) { /* not settable on this form; findBinTransfer still guards */ }
+
+      try { bt.setValue({ fieldId: 'location', value: o.locationId }); }
+      catch (e) { /* mandatory - the save will say so */ }
+
+      const d = parseDate(o.date);
+      if (d) { try { bt.setValue({ fieldId: 'trandate', value: d }); } catch (e) { } }
+      try {
+        bt.setValue({
+          fieldId: 'memo',
+          value: String(o.memo || 'RapidBridge inventory release ' + o.requestUuid)
+            .substring(0, 999)
+        });
+      } catch (e) { }
+
+      // Group the moves by item, preserving the order they arrived in.
+      const order = [];
+      const byItem = {};
+      moves.forEach((m) => {
+        if (!byItem[m.itemId]) { byItem[m.itemId] = []; order.push(m.itemId); }
+        byItem[m.itemId].push(m);
+      });
+
+      order.forEach((itemId) => {
+        const group = byItem[itemId];
+        const total = group.reduce((n, m) => n + m.quantity, 0);
+
+        bt.selectNewLine({ sublistId: 'inventory' });
+        btSet(bt, 'item', itemId);
+        btSet(bt, 'quantity', total);
+        // The non-tracked shape: the bins live on the line itself.
+        btSet(bt, 'binnumber', group[0].fromBin);
+        btSet(bt, 'tobinnumber', group[0].toBin);
+        btSet(bt, 'previousbinnumber', group[0].fromBin);
+
+        let sub = null;
+        try {
+          sub = bt.getCurrentSublistSubrecord({
+            sublistId: 'inventory', fieldId: 'inventorydetail'
+          });
+        } catch (e) { sub = null; }
+
+        if (sub) {
+          group.forEach((m) => {
+            sub.selectNewLine({ sublistId: 'inventoryassignment' });
+            // The lot is ISSUED from the on-hold bin. By VALUE, not text: it
+            // already exists, and resolving it by name here would re-open the
+            // ambiguity readLotsByName just closed.
+            if (m.lotId) subSet(sub, 'issueinventorynumber', m.lotId);
+            subSet(sub, 'binnumber', m.fromBin);
+            subSet(sub, 'tobinnumber', m.toBin);
+            subSet(sub, 'quantity', m.quantity);
+            sub.commitLine({ sublistId: 'inventoryassignment' });
+          });
+        }
+
+        bt.commitLine({ sublistId: 'inventory' });
+      });
+
+      return bt.save({ enableSourcing: true, ignoreMandatoryFields: true });
+    };
+
+    const btSet = (bt, fieldId, value) => {
+      try {
+        bt.setCurrentSublistValue({
+          sublistId: 'inventory', fieldId: fieldId, value: value
+        });
+      } catch (e) { /* not on this form */ }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // The release ledger — the duplicate guard that externalId cannot be
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * WHY THIS EXISTS.
+     *
+     * v1.0 leaned on two guards and neither is enough on its own:
+     *
+     *   request_uuid in the native externalId  catches a RESEND OF THE SAME
+     *       CALL. It does not catch a second call carrying a FRESH uuid for
+     *       the same lot - which is exactly what a Middleware retry after a
+     *       timeout looks like, because a retry that reuses the uuid is only
+     *       one of the two things middleware does.
+     *
+     *   the on-hold bin's balance  is SHARED between receipts and it LAGS.
+     *       Shared: several receipts put stock in one hold bin, so a balance
+     *       of 24 says nothing about whose 24 it is, and a second release
+     *       would cheerfully move another receipt's goods. Lagging:
+     *       `inventorybalance` is a search index, so a release called
+     *       seconds after its receipt can read a number that is not true
+     *       yet - in either direction.
+     *
+     * THE LEDGER HAS NEITHER PROBLEM. It is a Long Text field on the Item
+     * Receipt, so it is per receipt; it is a stored field, so it reads back
+     * immediately and exactly; and it records what was RECEIVED per lot
+     * alongside what has been RELEASED per lot, which is the only pair of
+     * numbers that can answer "may this move?".
+     *
+     * `custbody_jj_rb_release_log`, shape documented on C.TXN.releaseLog.
+     */
+    const emptyLedger = (receiptId) => ({
+      v: C.RELEASE_LEDGER.VERSION,
+      receipt: String(receiptId || ''),
+      seq: 0,
+      updated: '',
+      lots: {},
+      calls: [],
+      callCount: 0,
+      lotCount: 0
+    });
+
+    /** item + lot, the ledger's key. A non-tracked item keys on the item alone. */
+    const lotLedgerKey = (itemId, lotId) =>
+      String(itemId || '') + '|' + String(lotId || '');
+
+    /**
+     * The ledger as stored. ONE lookupFields.
+     *
+     * Unparseable JSON is NOT silently replaced with an empty ledger - that
+     * would hand a duplicate release a clean slate, which is the one outcome
+     * this whole mechanism exists to prevent. It is kept as a raw string on
+     * the result, the seed is refused, and the release fails loudly.
+     */
+    const readLedger = (receiptId) => {
+      const out = emptyLedger(receiptId);
+      if (!receiptId) return out;
+      let raw = '';
+      try {
+        const v = search.lookupFields({
+          type: 'itemreceipt', id: receiptId, columns: [TXN.releaseLog]
+        });
+        raw = textOf(v[TXN.releaseLog]);
+      } catch (e) {
+        log.audit({
+          title: 'RB release ledger could not be read: itemreceipt/' + receiptId,
+          details: (e && e.message) || String(e)
+        });
+        return out;
+      }
+      if (!raw) return out;
+
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+      if (!parsed || typeof parsed !== 'object') {
+        log.error({
+          title: 'RB release ledger is not valid JSON: itemreceipt/' + receiptId,
+          details: {
+            raw: String(raw).substring(0, 500),
+            effect: 'The release is refused. Replacing it with an empty ' +
+              'ledger would give a duplicate call a clean slate, which is ' +
+              'the one thing this field exists to prevent.'
+          }
+        });
+        out.corrupt = true;
+        return out;
+      }
+
+      out.v = Number(parsed.v) || C.RELEASE_LEDGER.VERSION;
+      out.seq = Number(parsed.seq) || 0;
+      out.updated = String(parsed.updated || '');
+      out.lots = (parsed.lots && typeof parsed.lots === 'object') ? parsed.lots : {};
+      out.calls = Array.isArray(parsed.calls) ? parsed.calls : [];
+      out.callCount = Number(parsed.callCount) || out.calls.length;
+      out.lotCount = Object.keys(out.lots).length;
+      return out;
+    };
+
+    /**
+     * FIRST RELEASE ONLY. What this receipt actually received, per lot.
+     *
+     * Read ONCE in a receipt's life and then carried in the stored JSON, so
+     * the cost is one read per receipt rather than one per release.
+     *
+     * Two ways in, because the join is not available in every account:
+     *
+     *   1. A transaction search with the `inventoryDetail` join - one search,
+     *      and the cheap answer.
+     *   2. `record.load` of the receipt and its inventory detail subrecords -
+     *      10 units plus the sublist reads, and it always works.
+     *
+     * An item with NO inventory detail (not lot or serial tracked) still gets
+     * a row, keyed on the item alone, so a bin-only release has an
+     * entitlement to measure against too.
+     */
+    const seedLedger = (receiptId, ledger) => {
+      if (ledger.corrupt) return ledger;
+      const seeded = ledger;
+      let got = seedFromSearch(receiptId, seeded);
+      if (!got) got = seedFromLoad(receiptId, seeded);
+      seeded.lotCount = Object.keys(seeded.lots).length;
+      log.audit({
+        title: 'RB release ledger seeded for itemreceipt/' + receiptId,
+        details: { via: got || 'nothing', lots: seeded.lotCount }
+      });
+      return seeded;
+    };
+
+    const addEntitlement = (ledger, itemId, lotId, lotName, qty) => {
+      const k = lotLedgerKey(itemId, lotId);
+      const row = ledger.lots[k] ||
+      {
+        item: String(itemId), lotId: String(lotId || ''),
+        lot: String(lotName || ''), received: 0, released: 0
+      };
+      row.received = (Number(row.received) || 0) + (Number(qty) || 0);
+      if (!row.lot && lotName) row.lot = String(lotName);
+      ledger.lots[k] = row;
+    };
+
+    const seedFromSearch = (receiptId, ledger) => {
+      let rows = 0;
+      try {
+        search.create({
+          type: 'itemreceipt',
+          filters: [['internalid', 'anyof', receiptId], 'AND',
+          ['mainline', 'is', 'F'], 'AND', ['taxline', 'is', 'F'], 'AND',
+          ['shipping', 'is', 'F']],
+          columns: [
+            'item',
+            search.createColumn({ name: 'inventorynumber', join: 'inventoryDetail' }),
+            search.createColumn({ name: 'quantity', join: 'inventoryDetail' }),
+            'quantity'
+          ]
+        }).run().each((r) => {
+          const itemId = String(r.getValue('item') || '');
+          if (!itemId) return true;
+          const lotId = String(r.getValue({
+            name: 'inventorynumber', join: 'inventoryDetail'
+          }) || '');
+          const lotName = r.getText({
+            name: 'inventorynumber', join: 'inventoryDetail'
+          }) || '';
+          const dq = Number(r.getValue({
+            name: 'quantity', join: 'inventoryDetail'
+          }));
+          const lq = Math.abs(Number(r.getValue('quantity')) || 0);
+          addEntitlement(ledger, itemId, lotId, lotName,
+            Math.abs(dq || 0) || (lotId ? 0 : lq));
+          rows++;
+          return true;
+        });
+      } catch (e) {
+        log.audit({
+          title: 'RB release ledger — the inventoryDetail join is not available',
+          details: (e && e.message) || String(e)
+        });
+        return '';
+      }
+      return rows ? 'search' : '';
+    };
+
+    const seedFromLoad = (receiptId, ledger) => {
+      let rec;
+      try { rec = record.load({ type: 'itemreceipt', id: receiptId, isDynamic: false }); }
+      catch (e) {
+        log.error({
+          title: 'RB release ledger — itemreceipt/' + receiptId + ' would not load',
+          details: (e && e.message) || String(e)
+        });
+        return '';
+      }
+      let n = 0;
+      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) { n = 0; }
+      let rows = 0;
+      for (let i = 0; i < n; i++) {
+        const g = (f) => {
+          try { return rec.getSublistValue({ sublistId: 'item', fieldId: f, line: i }); }
+          catch (e) { return ''; }
+        };
+        const itemId = String(g('item') || '');
+        if (!itemId) continue;
+        const lineQty = Math.abs(Number(g('quantity')) || 0);
+
+        let sub = null;
+        try {
+          sub = rec.getSublistSubrecord({
+            sublistId: 'item', fieldId: 'inventorydetail', line: i
+          });
+        } catch (e) { sub = null; }
+
+        if (!sub) {
+          addEntitlement(ledger, itemId, '', '', lineQty);
+          rows++;
+          continue;
+        }
+        let m = 0;
+        try { m = sub.getLineCount({ sublistId: 'inventoryassignment' }); }
+        catch (e) { m = 0; }
+        if (!m) { addEntitlement(ledger, itemId, '', '', lineQty); rows++; continue; }
+        for (let j = 0; j < m; j++) {
+          const sg = (f, text) => {
+            try {
+              return text
+                ? sub.getSublistText({ sublistId: 'inventoryassignment', fieldId: f, line: j })
+                : sub.getSublistValue({ sublistId: 'inventoryassignment', fieldId: f, line: j });
+            } catch (e) { return ''; }
+          };
+          addEntitlement(ledger, itemId,
+            String(sg('receiptinventorynumber') || sg('issueinventorynumber') || ''),
+            String(sg('receiptinventorynumber', true) || sg('issueinventorynumber', true) || ''),
+            Math.abs(Number(sg('quantity')) || 0));
+          rows++;
+        }
+      }
+      return rows ? 'load' : '';
+    };
+
+    const ledgerReleased = (ledger) => round6(Object.keys(ledger.lots)
+      .reduce((n, k) => n + (Number(ledger.lots[k].released) || 0), 0));
+    const ledgerReceived = (ledger) => round6(Object.keys(ledger.lots)
+      .reduce((n, k) => n + (Number(ledger.lots[k].received) || 0), 0));
+    const ledgerHeld = (ledger) => round6(Object.keys(ledger.lots)
+      .reduce((n, k) => n + Math.max(0,
+        (Number(ledger.lots[k].received) || 0) -
+        (Number(ledger.lots[k].released) || 0)), 0));
+    const round6 = (n) => Math.round((Number(n) || 0) * 1e6) / 1e6;
+
+    /**
+     * POST THE MOVES TO THE LEDGER, AND STAMP THE RECEIPT. One submitFields.
+     *
+     * ── WHY IT RE-READS ───────────────────────────────────────────────────
+     *
+     * The copy read before the save is STALE by the time we get here: the
+     * transfer took a moment, and another release could have landed in it.
+     * Writing that copy back would silently undo the other call's figures -
+     * a lost update, and the worst possible one, because the quantity it
+     * loses is the one guarding against a double move.
+     *
+     * So the merge is onto a FRESH read. The remaining window is between
+     * that read and the submitFields, which is milliseconds; NetSuite offers
+     * no row lock that would close it entirely, and pretending otherwise
+     * would be worse than saying so.
+     *
+     * ── AND IF THE FRESH READ SAYS WE ARE OVER ───────────────────────────
+     *
+     * The transfer is already saved; it cannot be un-saved by wishing. The
+     * ledger is written anyway - it must stay a true record of what moved -
+     * and the call returns `overRelease`, which makes the Sync Log row a
+     * FAILURE with an open work item naming the lots. Somebody reverses it
+     * by hand. Hiding it would leave the ledger right and the stock wrong.
+     */
+    const commitLedger = (receiptId, requestUuid, btId, moves, seeded) => {
+      const movedNow = round6(moves.reduce((n, m) => n + m.quantity, 0));
+      const fresh = readLedger(receiptId);
+      let ledger;
+
+      if (!fresh.corrupt && fresh.lotCount) {
+        // The normal path from the second release onwards: a stored ledger
+        // exists and it may have moved on since this call read it.
+        ledger = fresh;
+      } else {
+        // FIRST RELEASE for this receipt - the entitlements were seeded in
+        // memory and have never been stored, so a fresh read finds nothing.
+        // They are the whole guard, and writing only the lots THIS call
+        // touched would quietly forget the rest of the receipt.
+        ledger = emptyLedger(receiptId);
+        Object.keys((seeded && seeded.lots) || {}).forEach((k) => {
+          const r = seeded.lots[k];
+          ledger.lots[k] = {
+            item: r.item, lotId: r.lotId, lot: r.lot,
+            received: Number(r.received) || 0, released: Number(r.released) || 0
+          };
+        });
+        // And if even that is empty - a corrupt field cleared by hand - at
+        // least record what this call knows, rather than writing nothing.
+        moves.forEach((m) => {
+          if (ledger.lots[m.key]) return;
+          ledger.lots[m.key] = {
+            item: m.itemId, lotId: m.lotId, lot: m.lotName,
+            received: m.received, released: m.releasedBefore
+          };
+        });
+      }
+
+      // Another worker may already have recorded this very call.
+      if (ledger.calls.filter((c) => c.uuid === requestUuid).length) {
+        log.audit({
+          title: 'RB release ledger already carries ' + requestUuid,
+          details: {
+            receiptId: receiptId, binTransfer: btId,
+            note: 'Another call recorded it first. Not applied twice.'
+          }
+        });
+        return {
+          written: false, overRelease: false, movedNow: movedNow,
+          released: ledgerReleased(ledger), held: ledgerHeld(ledger),
+          received: ledgerReceived(ledger), perLot: perLotReleased(ledger, moves)
+        };
+      }
+
+      const over = [];
+      moves.forEach((m) => {
+        const row = ledger.lots[m.key] ||
+        {
+          item: m.itemId, lotId: m.lotId, lot: m.lotName,
+          received: m.received, released: 0
+        };
+        row.released = round6((Number(row.released) || 0) + m.quantity);
+        if (row.released > (Number(row.received) || 0) + 1e-9)
+          over.push((m.lotName || m.itemName || m.itemId) + ': released ' +
+            row.released + ' of ' + row.received + ' received');
+        ledger.lots[m.key] = row;
+      });
+
+      ledger.seq = (Number(ledger.seq) || 0) + 1;
+      ledger.updated = new Date().toISOString();
+      ledger.callCount = (Number(ledger.callCount) || 0) + 1;
+      ledger.calls.push({
+        uuid: requestUuid, bt: String(btId), at: ledger.updated,
+        moved: moves.map((m) => ({ k: m.key, q: m.quantity }))
+      });
+      // Keep the tail. The cumulative figures in `lots` are never trimmed -
+      // they are the guard. The full history of every call already lives in
+      // the Sync Log, which is where history belongs.
+      if (ledger.calls.length > C.RELEASE_LEDGER.MAX_CALLS)
+        ledger.calls = ledger.calls.slice(-C.RELEASE_LEDGER.MAX_CALLS);
+
+      const released = ledgerReleased(ledger);
+      const received = ledgerReceived(ledger);
+      const held = ledgerHeld(ledger);
+
+      const values = {};
+      values[TXN.releaseLog] = JSON.stringify({
+        v: C.RELEASE_LEDGER.VERSION, receipt: String(receiptId),
+        seq: ledger.seq, updated: ledger.updated,
+        lots: ledger.lots, calls: ledger.calls, callCount: ledger.callCount
+      });
+      values[TXN.releasedQty] = released;
+      values[TXN.heldQty] = held;
+      values[TXN.releasedAt] = new Date();
+      values[TXN.binTransfer] = String(btId);
+      values[TXN.requestUuid] = requestUuid;
+
+      let written = true;
+      try {
+        record.submitFields({
+          type: 'itemreceipt', id: receiptId, values: values,
+          options: { ignoreMandatoryFields: true }
+        });
+      } catch (e) {
+        written = false;
+        // THIS IS SERIOUS AND IT IS SAID SO. The stock moved and the ledger
+        // does not know. The next release will see the old figures and may
+        // move it again.
+        log.error({
+          title: 'RB release LEDGER NOT WRITTEN: itemreceipt/' + receiptId,
+          details: {
+            binTransfer: btId, requestUuid: requestUuid, error: (e && e.message) || String(e),
+            consequence: 'The transfer SAVED and the receipt does not record ' +
+              'it. A later release will measure against stale figures and ' +
+              'could move the same lot again. Reconcile by hand.'
+          }
+        });
+      }
+
+      return {
+        written: written,
+        overRelease: over.length > 0 || !written,
+        conflictNote: over.length
+          ? 'OVER-RELEASE. The Bin Transfer ' + btId + ' saved, and the ' +
+          'receipt\'s ledger now shows more released than was received: ' +
+          over.join('; ') + '. Two releases almost certainly overlapped. ' +
+          'The stock has moved and cannot be un-moved from here - reverse ' +
+          'the excess with a bin transfer in NetSuite and correct the ' +
+          'ledger on the receipt.'
+          : (written ? null
+            : 'The Bin Transfer ' + btId + ' saved but the receipt\'s ' +
+            'release ledger could NOT be written. A later release will ' +
+            'measure against stale figures and could move the same lot ' +
+            'again. Record the move on the receipt by hand before the ' +
+            'next release.'),
+        movedNow: movedNow, released: released, held: held, received: received,
+        perLot: perLotReleased(ledger, moves)
+      };
+    };
+
+    const perLotReleased = (ledger, moves) => {
+      const out = {};
+      moves.forEach((m) => {
+        out[m.key] = Number((ledger.lots[m.key] || {}).released) || m.quantity;
+      });
+      return out;
     };
 
     const mapForRecordType = (t) => {
@@ -976,7 +2232,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         search.create({
           type: 'inventorynumber',
           filters: [['inventorynumber', 'anyof', numbers], 'AND',
-            ['quantityonhand', 'greaterthan', 0]],
+          ['quantityonhand', 'greaterthan', 0]],
           columns: ['inventorynumber']
         }).run().each((r) => {
           out[String(r.getValue('inventorynumber') || '').toUpperCase()] = true;

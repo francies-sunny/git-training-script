@@ -417,7 +417,6 @@ governance, deployment, role audience and logging.
   "request_uuid": "11111111-2222-3333-4444-555555555555",
   "order_id": "16050",
   "shipment_uuid": "",
-  "scan_session_id": "POSTMAN-TEST-01",
   "transaction_date": "2026-09-30",
   "memo": "Postman test receipt for PO447",
   "lines": [
@@ -520,7 +519,116 @@ then told about a second has made two trips to the dock.
 { "success": true, "internal_id": "9001", "external_id": "3f9c…", "shipment_uuid": "9b21…" }
 ```
 
-### 4.5 Write error codes
+### 4.5 `inventory_release` — request
+
+The last step of a receipt. Creates a **Bin Transfer** moving verified lots out of the on-hold
+bin. Never an Inventory Status Change — Design v3.1 §9.2.1.
+
+```json
+{
+  "operation": "inventory_release",
+  "request_uuid": "f7c1a2b3-4d5e-4f60-8a1b-2c3d4e5f6071",
+  "order_id": "16050",
+  "item_receipt_internal_id": "2481003",
+  "shipment_uuid": "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+  "location_id": "13",
+  "from_bin": "77",
+  "to_bin": "88",
+  "transaction_date": "2026-10-05",
+  "memo": "EPCIS verification passed - PO447",
+  "lines": [
+    { "line_unique_key": "1", "item_id": "718", "lot": "LOT-2026-0815", "quantity": 24 },
+    { "line_unique_key": "2", "item_id": "718", "lot": "LOT-2026-0901", "quantity": 10 }
+  ]
+}
+```
+
+| Field | |
+|---|---|
+| `request_uuid` | **Mandatory.** Becomes the Bin Transfer's native `externalid`. A repeat is answered with the transfer that already exists, as a success — **no second transfer** |
+| `item_receipt_internal_id` · `shipment_uuid` | **One of them is required.** The receipt carries the RELEASE LEDGER (`custbody_jj_rb_release_log`) — received and released per lot — and that is what stops a retry moving the same stock twice. `RECEIPT_NOT_IDENTIFIED` without it |
+| `location_id` | A Bin Transfer **cannot cross locations**. Taken from the order or the receipt when absent |
+| `from_bin` · `to_bin` | Internal ids. Payload → the **Location's** on-hold / good bin → the config default bin. **Blank in both places is a configuration error, not a default** |
+| `lines[].lot` | **The NAME**, as TrackTrace prints it. Resolved against that item's **on-hand** inventory numbers, matched trimmed and case-insensitively. Also accepted as `lot_number` / `lot_name` |
+| `lines[].quantity` | Must not exceed what the from-bin actually holds |
+
+Two lots of one item become **one** `inventory` sublist line with **two** inventory assignments.
+
+### 4.6 `inventory_release` — response
+
+```json
+{
+  "success": true,
+  "bin_transfer_internal_id": "2492118",
+  "external_id": "f7c1a2b3-4d5e-4f60-8a1b-2c3d4e5f6071",
+  "item_receipt_internal_id": "2481003",
+  "order_id": "16050",
+  "location_id": "13",
+  "from_bin": "77",
+  "to_bin": "88",
+  "moved_quantity": 34,
+  "released_quantity": 34,
+  "received_quantity": 34,
+  "held_quantity": 0,
+  "fully_released": true,
+  "lines_released": [
+    { "line_unique_key": "1", "item_id": "718", "lot": "LOT-2026-0815",
+      "lot_internal_id": "901", "quantity": 24, "released_to_date": 24,
+      "received": 24, "from_bin": "77", "to_bin": "88" },
+    { "line_unique_key": "2", "item_id": "718", "lot": "LOT-2026-0901",
+      "lot_internal_id": "902", "quantity": 10, "released_to_date": 10,
+      "received": 10, "from_bin": "77", "to_bin": "88" }
+  ]
+}
+```
+
+`moved_quantity` is **this call**; `released_quantity`, `received_quantity` and `held_quantity`
+are **the receipt**, cumulatively, read off the ledger. Reporting only the first is what made a
+second release look reasonable.
+
+| Release line code | Source | |
+|---|---|---|
+| `LOT_NOT_FOUND` | lots | The name is not an on-hand lot of that item. **The release never creates a lot** |
+| `LOT_NOT_ON_RECEIPT` | **ledger** | The lot may be real and in that very bin — put there by a *different* receipt. Several receipts share one on-hold bin |
+| `ALREADY_RELEASED` | **ledger** | Everything this receipt received of that lot has gone. The commonest shape of a duplicate call, and the one `externalid` cannot see |
+| `QTY_EXCEEDS_RECEIVED` | **ledger** | Names received, already released, and what is still releasable |
+| `LOT_NOT_IN_BIN` | balance | Unreleased per the ledger, but not in the bin. Somebody moved it by hand. Refused, never redirected |
+| `QTY_EXCEEDS_IN_BIN` | balance | Some is physically there, not all |
+| `BIN_NOT_CONFIGURED` | — | No from-bin or no to-bin anywhere, or both the same |
+
+An `inventorybalance` search returning **no rows at all** is treated as a stale index, not as
+missing stock: it is an index, and a release called seconds after its receipt can legitimately
+read nothing. The release proceeds with an audit line. The **ledger** is the authority.
+
+`held_quantity > 0` is a **partial release** — normal, not a fault, but it leaves the Sync Log row
+**`Open - Needs Review`**, because stock left in the on-hold bin surfaces nowhere else until a
+picker finds the good bin short.
+
+The receipt is stamped with `custbody_jj_rb_released_qty`, `custbody_jj_rb_held_qty`,
+`custbody_jj_rb_released_at`, `custbody_jj_rb_bin_transfer` and the ledger itself,
+`custbody_jj_rb_release_log`:
+
+```json
+{ "v": 1, "receipt": "2481003", "seq": 1, "updated": "2026-10-05T10:11:12.000Z",
+  "lots": {
+    "718|901": { "item": "718", "lot": "LOT-2026-0815", "lotId": "901",
+                 "received": 24, "released": 24 },
+    "718|902": { "item": "718", "lot": "LOT-2026-0901", "lotId": "902",
+                 "received": 10, "released": 10 }
+  },
+  "calls": [
+    { "uuid": "f7c1a2b3-4d5e-4f60-8a1b-2c3d4e5f6071", "bt": "2492118",
+      "at": "2026-10-05T10:11:12.000Z",
+      "moved": [ { "k": "718|901", "q": 24 }, { "k": "718|902", "q": 10 } ] }
+  ],
+  "callCount": 1 }
+```
+
+**It is the authority on what may still be released.** Entitlements are seeded once, on the first
+release, from what the receipt actually received. A corrupt ledger refuses the release rather
+than resetting — a clean slate is exactly what a duplicate call wants.
+
+### 4.7 Write error codes
 
 **Document:** `NO_CONFIGURATION` · `FLOW_DISABLED` · `UNKNOWN_OPERATION` · `MISSING_REQUEST_UUID` ·
 `MALFORMED_PAYLOAD` · `ORDER_NOT_FOUND` · `ORDER_NOT_APPROVED` · `ORDER_NOT_SYNCED` ·
@@ -628,20 +736,21 @@ Addressable by `internal_id`, `transaction_uuid` or `document_number`.
       "description": "Test Purchase Description",
       "quantity": 2,
       "quantity_remaining": 2,
-      "unit": "Each",
+      "unit": "Pallet",
       "unit_id": "23",
-      "unit_abbreviation": "EA",
-      "conversion_rate": 1,
-      "is_base_unit": true,
-      "quantity_in_base_units": 2,
-      "remaining_in_base_units": 2,
+      "unit_as_entered": "23",
+      "unit_abbreviation": "PF",
+      "conversion_rate": 16,
+      "is_base_unit": false,
+      "quantity_in_base_units": 32,
+      "remaining_in_base_units": 32,
       "requires_serialization": true,
       "is_serial_tracked": false,
       "is_lot_tracked": true,
       "uses_bins": false,
-      "product_uuid": "PROD-718-EA",
+      "product_uuid": "PROD-718-PLT",
       "product_uuid_missing_reason": "",
-      "uom_unit_matched": "EACH",
+      "uom_unit_matched": "Pallet",
       "ndc": "1234-5678-90",
       "gtin": "00312345678906",
       "upc": "312345678906",
@@ -656,12 +765,52 @@ Addressable by `internal_id`, `transaction_uuid` or `document_number`.
 | Field | |
 |---|---|
 | `line_unique_key` | The `orderline` of the document this order **transforms into** — read off the transform so the key the device sends back is one the write side will find |
-| `unit` | The unit **name**. `unit_id` is the internal id beside it |
+| `unit` | The unit **name**, resolved from the item's Units Type. A transaction line stores the unit's **internal id** (`23`) and displays its abbreviation (`PF`); only the name matches a UOM Detail row |
+| `unit_id` · `unit_as_entered` | The id the line carries, and the raw value before resolution. `unit_as_entered` is the clue when resolution fails |
 | `conversion_rate` · `quantity_in_base_units` | The base unit is always Each, so a line in Pallets says how many Each that is |
-| `uom_unit_matched` | Which spelling of the unit found the UOM Detail row. Empty means none did |
+| `uom_unit_matched` | The UOM Detail row's Saleable Unit. **One candidate, no ladder** — empty means the resolved name has no row |
 | `requires_serialization` | Read from the **item**, through the configured Eligibility Field — never from the line column |
+| `product_uuid_missing_reason` | **Only ever set on an eligible line.** A non-eligible item is never sent to TrackTraceRX, so it has no product UUID by design and this field stays empty — nothing is wrong and nothing wants fixing |
 | `default_hold_bin` | The location's on-hold bin, falling back to the config default. Receipts only |
-| `lines_not_scannable` | Lines that require serialization and have no `product_uuid`. Submitting one is the failure the operator cannot undo |
+| `lines_not_scannable` | **Eligible** lines with no `product_uuid`. Submitting one is the failure the operator cannot undo. Each entry carries `unit`, `unit_id`, `code` (`UNIT_UNKNOWN` · `NO_ROW` · `NO_UUID`) and the prose `reason` |
+
+#### When a line cannot be scanned
+
+```json
+{
+  "lines_not_scannable": [
+    {
+      "line_unique_key": "1",
+      "item": "Amoxicillin 500mg Tablet (718)",
+      "unit": "Pallet",
+      "unit_id": "23",
+      "code": "UNIT_UNKNOWN",
+      "reason": "UNIT_UNKNOWN: the line is in unit id 23, which is not in this item's Units Type. That type offers: Each(1), Case, Package. The line and the item disagree about which Units Type applies - check the item's Units Type, or the unit on the line."
+    }
+  ],
+  "notes": [
+    {
+      "code": "LINES_NOT_SCANNABLE",
+      "message": "Order PO447 (16050): 1 of 2 line(s) cannot be scanned. line 1 - Amoxicillin 500mg Tablet (718) in Pallet - UNIT_UNKNOWN. UNIT_UNKNOWN means the line's unit is not in the item's Units Type, so no UOM Detail row could ever match it - fix the item's Units Type first. Until then the device must not offer these lines: a scan against them is refused at submit, with the goods already on the dock."
+    }
+  ]
+}
+```
+
+| Code | Meaning | Fix |
+|---|---|---|
+| `UNIT_UNKNOWN` | The unit is not in the item's Units Type at all. No UOM Detail row could ever match it | Correct the item's Units Type, or the unit on the line |
+| `NO_ROW` | The unit resolved to a name and UOM Detail has no row for it | Add a row whose Saleable Unit is that unit |
+| `NO_UUID` | The row exists; the Middleware has not accepted the item yet | Check the item's Last Sync Try Result |
+
+**This writes an OPEN Sync Log row** — `Open - Needs Review`, direction `Inbound Query
+(MW - NS read)`, outcome `Success`. The call worked; a person has to change something in
+NetSuite before the device can work. One open row per order per code: a device polling the
+same order does not open a second one.
+
+**Nothing else on a read does.** A clean read writes nothing. `RESULT_TRUNCATED`,
+`NO_SCANNABLE_LINES` and `UNFILTERED_LIST` reach the caller as `notes` and are audited, with
+no Sync Log row — the caller already has what it needs and nobody in the account has to act.
 
 ### 5.3 `allowed_bins_for_item`
 

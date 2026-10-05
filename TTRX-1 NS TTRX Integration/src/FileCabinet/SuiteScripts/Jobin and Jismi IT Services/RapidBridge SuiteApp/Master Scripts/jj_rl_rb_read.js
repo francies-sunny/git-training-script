@@ -377,13 +377,40 @@ define(['N/record', 'N/search', 'N/runtime',
         }
 
         // ── THE ONLY REASON A SUCCESSFUL READ IS WRITTEN DOWN ──────────────
-        //    Nothing unexpected happened ⇒ no Sync Log row. A clean browse
+        //
+        //    Nothing unexpected happened ⇒ NO Sync Log row. A clean browse
         //    leaves no trace, which is the whole point: the rows that survive
         //    are the ones somebody should look at.
+        //
+        //    And a note is not automatically one of those. Two classes,
+        //    C.READ_NOTE_REVIEW:
+        //
+        //      REVIEW  somebody in this account must change something before
+        //              the device can work. OPEN row, named action.
+        //      REST    the caller already has everything it needs in the
+        //              envelope — page again, add a filter, accept that the
+        //              order has no lines. Audit line, no row.
         if (NOTES.length) {
           out.notes = NOTES.slice();
-          recordRead(read, params, cfg, startedAt, method, true,
-            NOTES[0].code, NOTES.map((n) => n.code + ': ' + n.message).join(' | '));
+          const review = NOTES.filter(
+            (n) => C.READ_NOTE_REVIEW.indexOf(n.code) !== -1);
+
+          if (review.length) {
+            recordRead(read, params, cfg, startedAt, method, true,
+              review[0].code,
+              review.map((n) => n.code + ': ' + n.message).join(' | '), true);
+          } else {
+            log.audit({
+              title: 'RB read note — informational, no Sync Log row',
+              details: {
+                operation: params.operation,
+                codes: NOTES.map((n) => n.code),
+                rule: 'Not in C.READ_NOTE_REVIEW — the caller has what it ' +
+                  'needs in the envelope and nobody in this account has to ' +
+                  'act.'
+              }
+            });
+          }
         }
         return out;
 
@@ -421,13 +448,32 @@ define(['N/record', 'N/search', 'N/runtime',
      * the error fields, which is the honest reading: the call worked, and
      * something about the answer wants a human.
      */
-    const recordRead = (read, params, cfg, startedAt, method, ok, code, message) => {
+    const recordRead = (read, params, cfg, startedAt, method, ok, code, message, review) => {
       try {
         // The transaction reads can point the log row at the order they were
         // about; the bin reads have no transaction, and a typed List/Record
         // field set to nothing is how a whole log row gets rejected on save.
         const txnId = read.syncType === C.SYNCTYPE.TXN_FETCH
           ? String(params.internal_id || params.transaction_id || '') : '';
+        // The RESOLVED NetSuite type, not the caller's spelling. `PO`, `po`
+        // and `purchaseorder` are the same subject, and a dedupe key that
+        // disagreed with itself across spellings would open one work item per
+        // spelling the device happens to send.
+        const scan = scanFor(params.record_type);
+        const recType = String((scan && scan.recordType) || params.record_type || read.key);
+
+        // ── A REVIEW ROW IS OPENED ONCE, NOT ONCE PER POLL ────────────────
+        //    A device asking for the same order every thirty seconds would
+        //    otherwise open a work item every thirty seconds, all of them
+        //    saying the same thing. One open row per subject per code is the
+        //    whole finding; the next call adds nothing to it.
+        if (review && alreadyOpen(recType, txnId, code)) {
+          log.audit({
+            title: 'RB read review — already open, no second Sync Log row',
+            details: { recordType: recType, recordId: txnId, code: code }
+          });
+          return;
+        }
 
         logIo.recordInbound({
           entry: {
@@ -435,7 +481,7 @@ define(['N/record', 'N/search', 'N/runtime',
             logSubjectField: txnId ? C.LOG.transaction : null, fields: C.TXN
           },
           unit: {
-            recordType: String(params.record_type || read.key),
+            recordType: recType,
             recordId: txnId, uomId: null, storedUuid: '', storedPayload: '',
             storedSynced: false, data: {}, subjectDeleted: !txnId,
             uuidField: C.TXN.uuid, payloadField: C.TXN.payload,
@@ -446,7 +492,13 @@ define(['N/record', 'N/search', 'N/runtime',
           cfg: cfg,
           // ── THE TWO VALUES THAT MATTER ───────────────────────────────────
           direction: C.DIRECTION.INBOUND_QUERY,
-          status: C.STATUS.CLOSED_NO_ACTION,
+          // ── OPEN ONLY WHEN SOMEBODY HAS TO DO SOMETHING ──────────────────
+          //    A failed lookup is a failed lookup; the operator repeats it
+          //    with better parameters and nothing in this account changed.
+          //    A REVIEW note is different: an eligible item on a live order
+          //    cannot be scanned until a person fixes its UOM Detail or its
+          //    Units Type, and nobody finds that out by reading a closed row.
+          status: review ? C.STATUS.OPEN_REVIEW : C.STATUS.CLOSED_NO_ACTION,
           operation: C.OPERATION.QUERY,
           outcome: ok ? C.OUTCOME.SUCCESS : C.OUTCOME.FAILURE,
           trigger: C.TRIGGER.INBOUND_CALL,
@@ -458,16 +510,62 @@ define(['N/record', 'N/search', 'N/runtime',
           errorClass: ok ? null : C.ERRCLASS.BUSINESS,
           errorCode: code || null,
           errorMessage: message || null,
-          suggested: ok
-            ? 'The read returned an answer. Something about that answer is '
-            + 'unexpected and is recorded above; no operator action is '
-            + 'implied by this row on its own.'
-            : null
+          suggested: review
+            ? 'The read SUCCEEDED and the device was given the order. One or '
+            + 'more lines on it cannot be scanned: the item is eligible for '
+            + 'TrackTraceRX, so a product UUID is expected, and there is '
+            + 'none for the unit the line is in. A scan against such a line '
+            + 'is refused at submit, with the goods already on the dock. The '
+            + 'error above names the line, the item, the unit and the cause. '
+            + 'Fix it in NetSuite - add the missing UOM Detail row, or '
+            + 'correct the item\'s Units Type - and let the item re-sync. '
+            + 'This row closes when somebody confirms it; the next read does '
+            + 'not open a second one.'
+            : (ok
+              ? 'The read returned an answer. Something about that answer is '
+              + 'unexpected and is recorded above; no operator action is '
+              + 'implied by this row on its own.'
+              : null)
         });
       } catch (e) {
         // Losing the log row must not lose the answer.
         log.error({ title: 'RB read log', details: e });
       }
+    };
+
+    /**
+     * Is there already an OPEN review row saying this about this subject?
+     *
+     * One search, run ONLY when a review note fired — a clean read never
+     * reaches it, so the governance cost is zero on the path that runs all
+     * day. Four filters and one column; the row's existence is the answer.
+     *
+     * The code is part of the key on purpose. An order whose UOM Detail is
+     * missing AND whose read came back degraded has two different things
+     * wrong with it and two different people to fix them.
+     *
+     * A search that THROWS returns false. Writing a duplicate row is a much
+     * smaller failure than silently writing none.
+     */
+    const alreadyOpen = (recordType, recordId, code) => {
+      if (!recordId || !code) return false;
+      let found = false;
+      try {
+        search.create({
+          type: C.REC.LOG,
+          filters: [
+            [C.LOG.open, 'is', 'T'], 'AND',
+            [C.LOG.recType, 'is', String(recordType)], 'AND',
+            [C.LOG.nsId, 'is', String(recordId)], 'AND',
+            [C.LOG.errorCode, 'is', String(code)]
+          ],
+          columns: ['internalid']
+        }).run().each(() => { found = true; return false; });
+      } catch (e) {
+        log.error({ title: 'RB read alreadyOpen', details: e });
+        return false;
+      }
+      return found;
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -885,7 +983,6 @@ define(['N/record', 'N/search', 'N/runtime',
         const unitId = String(sv('units') || '');
         const unitRaw = unitId ||
           st('units') || st('unitsdisplay') || String(sv('unitsdisplay') || '');
-
         raw.push({
           line_unique_key: String(sv('orderline') || ''),
           item_id: itemId,
@@ -911,9 +1008,7 @@ define(['N/record', 'N/search', 'N/runtime',
 
       const itemTypes = {};
       itemIds.forEach((id) => { itemTypes[id] = (items[id] || {}).unitsType || ''; });
-      log.debug("fetch_transaction itemTypes", itemTypes);
       const unitBook = units.load(itemTypes);
-      log.debug("fetch_transaction unitBook", unitBook);
 
       const lines = raw.map((l) => {
         const info = items[l.item_id] || {};
@@ -981,7 +1076,13 @@ define(['N/record', 'N/search', 'N/runtime',
           // item's UOM row for this unit has not been accepted by the
           // Middleware yet — the device should not scan against it.
           product_uuid: row.uuid,
-          product_uuid_missing_reason: row.reason,
+          // ── ONLY AN ELIGIBLE ITEM CAN BE *MISSING* A UUID ──────────────
+          //    A non-eligible item is never sent to TrackTraceRX, so it has
+          //    no product UUID BY DESIGN. Reporting "the item has no UOM
+          //    Detail row for unit X" against one is noise: nothing is wrong,
+          //    nothing wants fixing, and it taught the reader to ignore the
+          //    field on the lines where it does mean something.
+          product_uuid_missing_reason: info.eligible === true ? row.reason : '',
           // Which spelling of the unit actually found the UOM Detail row.
           // Empty means none did, and `product_uuid_missing_reason` says what
           // was tried against what the item has.

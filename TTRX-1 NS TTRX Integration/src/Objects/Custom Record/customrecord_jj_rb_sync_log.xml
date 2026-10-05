@@ -1122,7 +1122,7 @@
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXTAREA</fieldtype>
+      <fieldtype>CLOBTEXT</fieldtype>
       <globalsearch>F</globalsearch>
       <help>The body AS SENT on this call. Truncated at the configured payload cap; PII redacted when Redact PII is on.</help>
       <isformula>F</isformula>
@@ -1163,7 +1163,7 @@
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXTAREA</fieldtype>
+      <fieldtype>CLOBTEXT</fieldtype>
       <globalsearch>F</globalsearch>
       <help>The body AS RECEIVED on this call. Truncated at the configured payload cap.</help>
       <isformula>F</isformula>
@@ -1245,7 +1245,7 @@
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXTAREA</fieldtype>
+      <fieldtype>CLOBTEXT</fieldtype>
       <globalsearch>F</globalsearch>
       <help>The exact payload string sent on THIS attempt. Written on every record, main and child alike, before the call is made. The engine reads it back from the newest record with Success checked to answer &quot;what does the Middleware already have?&quot; - the safety net that stops a record whose own stored payload was lost from being created a second time.</help>
       <isformula>F</isformula>
@@ -1532,7 +1532,7 @@
       <dynamicdefault></dynamicdefault>
       <enabletextenhance>F</enabletextenhance>
       <encryptatrest>F</encryptatrest>
-      <fieldtype>TEXTAREA</fieldtype>
+      <fieldtype>CLOBTEXT</fieldtype>
       <globalsearch>F</globalsearch>
       <help>The exact payload string last accepted by the Middleware. Change detection is a direct comparison of this against the freshly built payload - equal means nothing to send. NEVER written on a failure: this must keep meaning &quot;what the destination currently has&quot;, or a failed record compares equal on the next save and never syncs again.</help>
       <isformula>F</isformula>
