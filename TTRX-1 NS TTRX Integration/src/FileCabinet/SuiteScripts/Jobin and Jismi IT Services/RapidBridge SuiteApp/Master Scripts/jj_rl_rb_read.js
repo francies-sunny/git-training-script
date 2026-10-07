@@ -929,7 +929,7 @@ define(['N/record', 'N/search', 'N/runtime',
           util.scannableStatusNames(s.recordType).join(', ') +
           (statusRow && statusRow.sync
             ? '. It is still synchronized with TrackTraceRX; it simply has ' +
-              'nothing left to receive or fulfil.'
+            'nothing left to receive or fulfil.'
             : '.'));
 
       const txnUuid = textOf(head[C.TXN.uuid]);
@@ -1176,7 +1176,7 @@ define(['N/record', 'N/search', 'N/runtime',
         search.create({
           type: s.recordType,
           filters: [['mainline', 'is', 'T'], 'AND',
-            (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
+          (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
           columns: ['internalid']
         }).run().each((r) => { hit = String(r.id); return false; });
       } catch (e) {
@@ -1227,8 +1227,12 @@ define(['N/record', 'N/search', 'N/runtime',
         // The join id is `binNumber` on BOTH the filters and the columns. A
         // filter that spells it differently from its column is accepted by
         // NetSuite and then silently joins nothing.
+        // `inactive`, NOT `isinactive`. The Bin record is the one type that
+        // spells it that way, and the wrong spelling does not error - it
+        // matches nothing, so an item with perfectly good allowed bins comes
+        // back with none and the device is told it cannot scan.
         const filters = [['internalid', 'anyof', itemId], 'AND',
-          ['binNumber.isinactive', 'is', 'F']];
+        ['binNumber.inactive', 'is', 'F']];
         if (loc) filters.push('AND', ['binNumber.location', 'anyof', loc]);
         search.create({
           type: 'item',
@@ -1343,13 +1347,14 @@ define(['N/record', 'N/search', 'N/runtime',
 
       const B = C.MASTER.bin.fields;
       const filters = [['location', 'anyof', loc]];
-      if (!includeInactive) filters.push('AND', ['isinactive', 'is', 'F']);
+      // `inactive` on a bin, not `isinactive` - see allowedBinsForItem.
+      if (!includeInactive) filters.push('AND', ['inactive', 'is', 'F']);
 
       const bins = [];
       try {
         search.create({
           type: 'bin', filters: filters,
-          columns: ['internalid', 'binnumber', 'location', 'isinactive',
+          columns: ['internalid', 'binnumber', 'location', 'inactive',
             'memo', B.uuid]
         }).run().each((r) => {
           bins.push({
@@ -1358,7 +1363,7 @@ define(['N/record', 'N/search', 'N/runtime',
             location_id: String(r.getValue('location') || ''),
             location_name: r.getText('location') || '',
             description: r.getValue('memo') || '',
-            available: !util.truthy(r.getValue('isinactive')),
+            available: !util.truthy(r.getValue('inactive')),
             bin_uuid: r.getValue(B.uuid) || ''
           });
           return bins.length < C.READ_PAGE.MAX;
@@ -1661,9 +1666,9 @@ define(['N/record', 'N/search', 'N/runtime',
           matchedUnit: '',
           reason: Object.keys(rows).length
             ? 'NO_ROW: the item has no UOM Detail row for unit "' +
-              (unitName || C.BASE_UNIT) + '". It has: ' +
-              Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
-              'unit, or correct the Saleable Unit on an existing one.'
+            (unitName || C.BASE_UNIT) + '". It has: ' +
+            Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
+            'unit, or correct the Saleable Unit on an existing one.'
             : 'NO_ROW: the item has no UOM Detail rows at all.'
         };
       }

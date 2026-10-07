@@ -2196,3 +2196,70 @@ the path and **not** in the body, the semicolon string in all four shapes, the u
 gate, both sides of the pharma flag, Use Bins off, the location cascade and its blocked case, update
 versus no-change, inactivation, and that `custom_uuid` travels in the body but stays out of the
 comparison string.
+
+---
+
+## Pass 27 — two platform facts about the Bin record
+
+`jj_rb_core.js` · `jj_rb_sync.js` · `jj_rb_io.js` · `jj_rb_txn.js` · `jj_rl_rb_read.js` ·
+`jj_mu_rb_resync.js` · `t9.js` · `t14.js` · `syharness.js`.
+
+Pass 26 shipped the bin sync against the design documents. The first live run found two things no
+document says.
+
+### 1. `record.submitFields` does not work on a bin
+
+It fails with an unexpected error when it carries custom fields. Not a permission problem, not a
+field-id typo — the record type does not support the partial-submit path for them. **A bin has to
+be loaded and saved.**
+
+There are **nineteen** `submitFields` calls across the engine, the log writer, the transaction
+module and the Mass Update, and every one of them can be handed a bin. Nineteen places to remember
+a platform quirk is nineteen places to forget it, so there is now one:
+
+```js
+util.writeFields(type, id, values)   // submitFields, except for C.LOAD_AND_SAVE
+```
+
+All nineteen call sites moved to it. `LOAD_AND_SAVE` holds `bin` and nothing else; a type is added
+to that list when the platform proves it needs to be, not when somebody guesses.
+
+| | |
+|---|---|
+| Cost | 10 units instead of 2 |
+| Tolerance | A field that is not on the record is skipped and audited, the same way `submitFields` skips it. One undeployed field must not lose the write of the six beside it |
+| Throws | Exactly as `submitFields` does, so every existing `try/catch` around a write still catches the same thing |
+
+**The re-entry it buys.** A load-and-save fires the bin's own User Event, which is this SuiteApp's,
+and which calls straight back in. `SYNC_CONTROL_FIELDS` already carries all seven
+`custrecord_jj_rb_bin_*` fields, so `onlySyncFieldsChanged` sees a save that touched nothing but
+sync control and the User Event returns before doing anything. **Remove a bin field from that list
+and this recurses** — said so in the code, where somebody editing the list will read it.
+
+### 2. A bin spells it `inactive`, not `isinactive`
+
+In a search and in a lookup. Every other master type uses `isinactive`.
+
+**And the wrong spelling does not error.** It returns `undefined`, which reads as *active* — so an
+inactivated bin would have gone on being reported as live, and `is_active` would never have flipped
+in the payload. The quiet kind of wrong.
+
+| Fixed | |
+|---|---|
+| `C.MASTER.bin.extraColumns` | `isinactive` → `inactive` |
+| `C.MASTER.bin.inactiveField` | New. `resolveUnits` copies the value onto `data.isinactive`, so `preflight`, `operationFor` and the builders go on reading **one** field name for every type |
+| `bins_for_location` | Filter and column both. `available` is read off `inactive` |
+| `allowed_bins_for_item` | `binNumber.isinactive` → `binNumber.inactive`. Same failure mode: it matched nothing, so an item with perfectly good allowed bins came back with none and the device was told it could not scan |
+
+`customlist_jj_rb_fulfil_exception` and the UOM Detail searches keep `isinactive` — they are custom
+records, and they spell it the normal way.
+
+### The harness refuses it too
+
+`syharness.js`'s `record.submitFields` stub throws `Unexpected Error` for a bin, exactly as the
+platform does. A regression now fails the suite instead of the account.
+
+813 assertions across 14 suites. `t14` (68) gained the load-and-save path, that a location still
+goes through `submitFields`, that an undeployed field does not lose its neighbours, and both sides
+of the `inactive` reading. `t9` (203) asserts the bin spelling on both read searches and that
+`available` is actually read, not defaulted.

@@ -1235,11 +1235,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         });
         unit.storedUuid = prior.uuid;
         try {
-          record.submitFields({
-            type: recordType, id: recordId,
-            values: { [unit.uuidField]: prior.uuid },
-            options: { ignoreMandatoryFields: true }
-          });
+          util.writeFields(recordType, recordId, { [unit.uuidField]: prior.uuid }, { ignoreMandatoryFields: true });
         } catch (e) {
           log.error({ title: 'RB txn could not write adopted UUID', details: e });
         }
@@ -1405,10 +1401,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (unit.payloadField) values[unit.payloadField] = '';
       if (unit.syncedField) values[unit.syncedField] = false;
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) { log.error('Error @ txn clearRemoteIdentity', e); }
       unit.storedUuid = '';
       unit.storedPayload = '';
@@ -1501,11 +1494,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
     const stampLineCounts = (logId, total, sent) => {
       if (!logId) return;
       try {
-        record.submitFields({
-          type: C.REC.LOG, id: logId,
-          values: { [C.LOG.lineTotal]: total, [C.LOG.lineSent]: sent },
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(C.REC.LOG, logId, { [C.LOG.lineTotal]: total, [C.LOG.lineSent]: sent }, { ignoreMandatoryFields: true });
       } catch (e) { /* a decoration; never worth failing the call over */ }
     };
 
@@ -1739,10 +1728,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (unit.syncedField) values[unit.syncedField] = false;
       if (unit.payloadField) values[unit.payloadField] = '';
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) { log.error('Error @ txn stampVoided', e); }
       logIo.stampTry(unit, C.TRY.SYNCED, null,
         'The destination transaction was voided because this order was closed. ' +

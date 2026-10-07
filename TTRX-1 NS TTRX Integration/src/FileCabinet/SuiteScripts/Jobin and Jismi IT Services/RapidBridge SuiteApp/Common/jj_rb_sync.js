@@ -218,9 +218,29 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       unit.storedUuid = f.uuid ? textOf(vals[f.uuid]) : null;
       unit.storedPayload = f.payload ? textOf(vals[f.payload]) : null;
       unit.storedSynced = f.synced ? util.truthy(vals[f.synced]) : false;
-      unit.data = vals;
+      unit.data = normaliseInactive(entry, vals);
 
       return { list: [unit] };
+    };
+
+    /**
+     * ONE NAME FOR "IS THIS RECORD INACTIVE".
+     *
+     * Every master type spells it `isinactive` in a search and a lookup -
+     * except BIN, which spells it `inactive`. Asking a bin for `isinactive`
+     * does not error; it returns undefined, so every bin reads as ACTIVE and
+     * an inactivation never reaches TrackTraceRX. A silent wrong answer, which
+     * is the worst kind.
+     *
+     * Rather than teach `preflight`, `operationFor` and every builder about
+     * one record type, the value is copied onto `isinactive` here and the rest
+     * of the engine goes on reading one field name.
+     */
+    const normaliseInactive = (entry, vals) => {
+      const src = entry && entry.inactiveField;
+      if (!src || src === 'isinactive') return vals;
+      if (vals && vals.isinactive === undefined) vals.isinactive = vals[src];
+      return vals;
     };
 
     /**
@@ -1080,18 +1100,18 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               trigger: trigger,
               note: locId
                 ? 'Location ' + locId + ' has no Middleware UUID yet, and a ' +
-                  'storage area is addressed THROUGH its location.'
+                'storage area is addressed THROUGH its location.'
                 : 'This bin names no location, so there is no path to send ' +
-                  'it to.',
+                'it to.',
               correlation: correlation
             });
             logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT, null,
               locId
                 ? 'The location (' + locId + ') has no Middleware UUID yet. A ' +
-                  'storage area is created UNDER a location - its identifier ' +
-                  'is in the URL - so the location must sync first.'
+                'storage area is created UNDER a location - its identifier ' +
+                'is in the URL - so the location must sync first.'
                 : 'This bin has no location. A storage area cannot be ' +
-                  'addressed without one.');
+                'addressed without one.');
             results.push({ ok: false, blocked: 'location not synced' });
             return;
           }
@@ -1160,11 +1180,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           if (unit.uuidField) {
             try {
               log.debug("Write Adopted UUID to record", { type: unit.recordType, id: unit.recordId, field: unit.uuidField, value: prior.uuid });
-              record.submitFields({
-                type: unit.recordType, id: unit.recordId,
-                values: { [unit.uuidField]: prior.uuid },
-                options: { ignoreMandatoryFields: true }
-              });
+              util.writeFields(unit.recordType, unit.recordId, { [unit.uuidField]: prior.uuid }, { ignoreMandatoryFields: true });
             } catch (e) {
               // Not fatal: the call below already uses the adopted value.
               log.error({ title: 'RB could not write adopted UUID', details: e });
@@ -1768,10 +1784,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.SYNCED);
 
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
@@ -1805,10 +1818,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.NO_CHANGE);
 
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
         mirrorUomRow(unit, {
           uuid: unit.storedUuid, payload: payloadStr, synced: true
         });
@@ -1881,12 +1891,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         if (!storageAreaUuid) return;
 
-        record.submitFields({
-          type: unit.recordType,
-          id: unit.recordId,
-          values: { [fieldId]: storageAreaUuid },
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, { [fieldId]: storageAreaUuid }, { ignoreMandatoryFields: true });
       } catch (e) {
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
@@ -1929,10 +1934,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       log.debug("Submitting fields to record", { details: { type: unit.recordType, id: unit.recordId, values: values } });
 
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
 
         // Keep the in-memory unit in step with the record that was just
         // written. Anything running later in this same execution — the address
@@ -1971,10 +1973,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       // the stored payload and the uuid are deliberately NOT written.
 
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
@@ -2016,10 +2015,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             deferred ? C.TRY.DEFERRED : C.TRY.FAIL_API);
         }
         try {
-          record.submitFields({
-            type: itemType, id: itemId, values: pv,
-            options: { ignoreMandatoryFields: true }
-          });
+          util.writeFields(itemType, itemId, pv, { ignoreMandatoryFields: true });
         } catch (e) {
           logIo.exception(entry, { type: itemType, id: itemId }, e);
         }
@@ -2039,10 +2035,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           : (deferred ? C.TRY.DEFERRED : C.TRY.FAIL_API));
 
       try {
-        record.submitFields({
-          type: itemType, id: itemId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(itemType, itemId, values, { ignoreMandatoryFields: true });
       } catch (e) {
         logIo.exception(entry, { type: itemType, id: itemId }, e);
       }
@@ -3137,19 +3130,13 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     const forgetUomRow = (uomRowId) => {
       const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
       try {
-        record.submitFields({
-          type: C.REC.UOM, id: uomRowId,
-          values: {
-            [U.uuid]: '', [U.payload]: '', [U.synced]: false,
-            [U.lastTry]: new Date(),
-            [U.tryResult]: lists.id(C.LIST.tryResult, C.TRY.SYNCED)
-          },
-          options: { ignoreMandatoryFields: true }
-        });
-        log.debug({
-          title: 'RB orphaned UOM row cleared ' + uomRowId,
-          details: 'parent item deleted; UUID and stored payload removed'
-        });
+        util.writeFields(C.REC.UOM, uomRowId, {
+          [U.uuid]: '', [U.payload]: '', [U.synced]: false,
+          [U.lastTry]: new Date(),
+          [U.tryResult]: lists.id(C.LIST.tryResult, C.TRY.SYNCED)
+        }, { ignoreMandatoryFields: true });
+        log.debug('RB orphaned UOM row cleared ' + uomRowId,
+          'parent item deleted; UUID and stored payload removed');
       } catch (e) {
         log.error({ title: 'RB forgetUomRow ' + uomRowId, details: e });
       }

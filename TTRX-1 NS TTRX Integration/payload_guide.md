@@ -2,22 +2,26 @@
 NetSuite → Middleware: API Key
 Middleware → NetSuite: OAuth 2.0 – JWT Bearer Grant (Credentials will be shared)
 
-# Dosage Form
-Create Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms
-Update Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms/{{tran_uuid}}
-Method: POST
-Payload:
+# Master Data Sync
+## Dosage Form
+- Create Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms
+- Update Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms/{{uuid}}
+- Method: POST
+- Payload:
+```
 { 
   "code": "Test2", 
   "is_active": true, 
   "name": "Test2" 
 }
+```
 
-# Location
-Create Endpoint: https://api.tracktraceweb.com/2.0/locations
-Update Endpoint: https://api.tracktraceweb.com/2.0/locations/{{tran_uuid}}
-Method: POST
-Payload:
+## Location
+- Create Endpoint: https://api.tracktraceweb.com/2.0/locations
+- Update Endpoint: https://api.tracktraceweb.com/2.0/locations/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     "create_default_storage_area": true,                              // Always true
     "custom_uuid": "TEST-UUID-00000001",
@@ -32,12 +36,14 @@ Payload:
     "name": "Test1",
     "parent_location_uuid": ""
 }
+```
 
-# Address
-Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}/addresses
-Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}/addresses/{{addr_uuid}}
-Method: POST
-Payload:
+## Address
+- Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{uuid}}/addresses
+- Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{uuid}}/addresses/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     "address_gs1_id": "",                                             // Always Empty
     "address_nickname": "Test A BCD Label",                           // Address Label; 'Address N' by line when unlabelled
@@ -52,12 +58,14 @@ Payload:
     "state": "NJ",
     "zip": "08901"
 }
+```
 
-# Customer
-Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
-Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}
-Method: POST
-Payload:
+## Customer
+- Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
+- Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     "custom_uuid": "b5969a19-eacc-4b4b-a12a-9c2fde24722d",
     "name": "Test1",                                                    // Company Name; Alternate Name when Individual; else Entity ID
@@ -95,12 +103,14 @@ Payload:
     "is_enable_transmit_outbound_850": "",                              // Always Empty
     "omit_comm_aggr_in_epcis": false                                    // Always false
 }
+```
 
-# Vendor
-Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
-Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}
-Method: POST
-Payload:
+## Vendor
+- Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
+- Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     "custom_uuid": "346d2399-15c9-4acf-b047-0e06f7ed386e",
     "name": "Test 1",                                                   // Company Name; falls back to Entity ID
@@ -138,12 +148,14 @@ Payload:
     "is_enable_transmit_outbound_850": "",                              // Always Empty
     "omit_comm_aggr_in_epcis": false                                    // Always false
 }
+```
 
-# Item/UOM Details
-Create Endpoint: https://api.tracktraceweb.com/2.0/products/
-Update Endpoint: https://api.tracktraceweb.com/2.0/products/{{tran_uuid}}
-Method: POST
-Payload:
+## Item/UOM Details
+- Create Endpoint: https://api.tracktraceweb.com/2.0/products/
+- Update Endpoint: https://api.tracktraceweb.com/2.0/products/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     custom_uuid: "",                                                    // Empty on create; the TrackTrace UUID on every later call
     type: "Pharmaceutical",                                             // From config or default to 'Pharmaceutical'
@@ -189,12 +201,31 @@ Payload:
     is_bin_managed: false,                                              // Bin feature AND config Use Bins AND item Use Bins
     bin_feature_enabled: true                                           // NetSuite Bin Management feature in effect
 }
+```
 
-# Purchase Order Create/Update
-Create Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase
-Update Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase/{{tran_uuid}}
-Method: POST
-Payload:
+## Bin
+- Create Endpoint: https://api.tracktraceweb.com/2.0/locations/{{uuid}}/storage_areas
+- Update Endpoint: https://api.tracktraceweb.com/2.0/locations/{{uuid}}/storage_areas/{{uuid}}
+- Method: POST
+- Payload:
+```
+{
+    "code": "",
+    "is_active": true,
+    "is_storage_conditions_verification_disabled": false,
+    "name": "Test Hold Bin 1",
+    "properties": "FROZEN"
+}
+```
+
+# Transaction Sync
+
+## Purchase Order Create/Update
+- Create Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase
+- Update Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase/{{uuid}}
+- Method: POST
+- Payload:
+```
 {
     "transaction_uuid": "f4efb87c-e483-4f31-b91c-dcfe21382bb6",
     "custom_id": "PO446",
@@ -219,11 +250,13 @@ Payload:
     "order_nbr": "PO446",
     "po_nbr": "PO446"
 }
+```
 
-# Sales Order Create/Update
-Endpoint: https://api.tracktraceweb.com/2.0/transactions/sales
-Method: POST
-Payload:
+## Sales Order Create/Update
+- Endpoint: https://api.tracktraceweb.com/2.0/transactions/sales
+- Method: POST
+- Payload:
+```
 {
       transaction_uuid: "",
       custom_id: "SO609",
@@ -249,11 +282,13 @@ Payload:
       po_nbr: "SO609",
       outbound_transaction_sub_type: "SALES"
 }
+```
 
-# Item Receipt
-Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
-Method: POST
-Payload:
+## Item Receipt
+- Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
+- Method: POST
+- Payload:
+```
 {
     "operation": "item_receipt",
     "request_uuid": "11111111-2222-3333-4444-555555555555",
@@ -296,19 +331,23 @@ Payload:
         }
     ]
 }
+```
 
-Response:
+- Response:
+```
 {
     "success": true,
     "internal_id": 16453,
     "external_id": "11111111-2222-3333-4444-555555555563",
     "lines_posted": 1
 }
+```
 
-# Item Fulfillment
-Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
-Method: POST
-Payload:
+## Item Fulfillment
+- Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
+- Method: POST
+- Payload:
+```
 {
   "operation": "item_fulfillment",
   "request_uuid": "3f8c21b6-7d94-4e52-9a10-5b6c7d8e9f01",
@@ -355,8 +394,10 @@ Payload:
     }
   ]
 }
+```
 
-Response:
+- Response:
+```
 {
     "success": true,
     "internal_id": 16954,
@@ -366,12 +407,16 @@ Response:
     "exception_lines": [],
     "shipping_status": "Shipped"
 }
+```
 
-# PO/SO List
-Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=list_transactions&record_type=purchaseorder&location=13&page_size=50
-Method: GET
-record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
-Response:
+# Lists APIs
+
+## PO/SO List
+- Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=list_transactions&record_type=purchaseorder&location=13&page_size=50
+- Method: GET
+- record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
+- Response:
+```
 {
     "success": true,
     "record_type": "purchaseorder",
@@ -408,12 +453,14 @@ Response:
         }
     ]
 }
+```
 
-# PO/SO Detail
-Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fetch_transaction&record_type=purchaseorder&internal_id=16352
-Method: GET
-record_type: 'purchaseorder' for purchase orders and 'salesorder' for sales orders
-Response:
+## PO/SO Detail
+- Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fetch_transaction&record_type=purchaseorder&internal_id=16352
+- Method: GET
+- record_type: 'purchaseorder' for purchase orders and 'salesorder' for sales orders
+- Response:
+```
 {
     "success": true,
     "internal_id": "16352",
@@ -493,11 +540,13 @@ Response:
         }
     ]
 }
+```
 
-# Item Fulfillment Exception
-Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fulfilment_exceptions
-Method: GET
-Respose:
+## Item Fulfillment Exception
+- Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fulfilment_exceptions
+- Method: GET
+- Response:
+```
 {
     "success": true,
     "list_id": "customlist_jj_rb_fulfil_exception",
@@ -534,3 +583,4 @@ Respose:
         }
     ]
 }
+```

@@ -21,8 +21,8 @@
  *
  * §7.12.
  */
-define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
-  (record, search, core, io, sync) => {
+define(['N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
+  (search, core, io, sync) => {
 
     const { C, util, config } = core;
     const { logIo } = io;
@@ -61,11 +61,11 @@ define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '.
         // nothing, so clear the rows.
         if (entry.key === 'ITEM') clearItemPayloads(recordId);
         else if (entry.fields && entry.fields.payload) {
-          record.submitFields({
-            type: recordType, id: recordId,
-            values: { [entry.fields.payload]: '' },
-            options: { ignoreMandatoryFields: true }
-          });
+          // util.writeFields, not record.submitFields: a BIN refuses the
+          // partial-submit path for custom fields and has to be loaded and
+          // saved. One function knows that; this call site does not.
+          util.writeFields(recordType, recordId,
+            { [entry.fields.payload]: '' });
         }
 
         sync.run({
@@ -93,10 +93,7 @@ define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '.
 
       ids.forEach((id) => {
         try {
-          record.submitFields({
-            type: C.REC.UOM, id: id, values: { [U.payload]: '' },
-            options: { ignoreMandatoryFields: true }
-          });
+          util.writeFields(C.REC.UOM, id, { [U.payload]: '' });
         } catch (e) { /* the engine will still evaluate it */ }
       });
     };

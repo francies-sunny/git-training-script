@@ -1074,7 +1074,17 @@ define(['N/search', 'N/record'],
         logSubjectField: LOG.bin,
         // The native columns. `location` is the one that matters: it supplies
         // the path segment, and a bin cannot be addressed without it.
+        //
+        // `inactive`, NOT `isinactive`. The Bin record is the one master type
+        // that spells it differently in a search or a lookup, and asking for
+        // `isinactive` does not error - it returns undefined, so every bin
+        // reads as active and an inactivation never reaches TrackTraceRX.
+        // Observed live, 7 October 2026.
         extraColumns: ['binnumber', 'location', 'inactive', 'memo'],
+        // Normalised onto `data.isinactive` by resolveUnits, so the generic
+        // gates - preflight, operationFor, the payload's is_active - go on
+        // reading one field name for every type.
+        inactiveField: 'inactive',
         fields: {
           uuid: 'custrecord_jj_rb_bin_uuid', payload: 'custrecord_jj_rb_bin_payload',
           synced: 'custrecord_jj_rb_bin_synced',
@@ -1533,11 +1543,76 @@ define(['N/search', 'N/record'],
       return changed > 0;                  // only ours changed, and something did
     };
 
+    /**
+     * ══ WRITING A FIELD BACK ONTO A RECORD ════════════════════════════════
+     *
+     * `record.submitFields` everywhere, EXCEPT where the platform refuses it.
+     *
+     * ── BIN ────────────────────────────────────────────────────────────────
+     *
+     * `submitFields` on a `bin` fails with an unexpected error when it carries
+     * custom fields. It is not a permission problem and not a field-id typo:
+     * the record type does not support the partial-submit path for them.
+     * Observed live, 7 October 2026.
+     *
+     * So a bin is LOADED AND SAVED. That costs 10 units instead of 2 and it
+     * fires the bin's own User Event - which is this SuiteApp's, and which
+     * re-enters here. `SYNC_CONTROL_FIELDS` is what stops that recursing: a
+     * save that touches only sync-control fields is not a change worth
+     * syncing, and the User Event returns before it does anything.
+     *
+     * ── WHY ONE FUNCTION AND NOT A FLAG AT EACH CALL SITE ─────────────────
+     *
+     * There are nineteen submitFields calls across the engine, the log writer
+     * and the transaction module. Every one of them can be handed a bin.
+     * Nineteen places to remember a platform quirk is nineteen places to
+     * forget it; this is one.
+     *
+     * ── THE RE-ENTRY THIS COSTS ───────────────────────────────────────────
+     *
+     * A load-and-save fires the bin's own User Event, which is THIS
+     * SuiteApp's, and which calls back in here. `SYNC_CONTROL_FIELDS` carries
+     * all seven `custrecord_jj_rb_bin_*` fields, so `onlySyncFieldsChanged`
+     * sees a save that touched nothing but sync control and the User Event
+     * returns before it does anything. Remove a bin field from that list and
+     * this recurses.
+     *
+     * THROWS exactly as submitFields does, so every existing try/catch around
+     * a write still catches the same thing.
+     */
+    const LOAD_AND_SAVE = Object.freeze(['bin']);
+
+    const writeFields = (type, id, values, options) => {
+      const t = String(type || '').toLowerCase();
+      if (LOAD_AND_SAVE.indexOf(t) === -1)
+        return record.submitFields({
+          type: type, id: id, values: values,
+          options: options || { ignoreMandatoryFields: true }
+        });
+
+      const rec = record.load({ type: type, id: id, isDynamic: false });
+      Object.keys(values || {}).forEach((f) => {
+        if (values[f] === undefined) return;
+        // Same tolerance submitFields has: a field that is not on this record
+        // is skipped, not fatal. One undeployed field must not lose the write
+        // of the six beside it.
+        try { rec.setValue({ fieldId: f, value: values[f] }); }
+        catch (e) {
+          log.audit({
+            title: 'RB writeFields - ' + type + '.' + f + ' would not set',
+            details: (e && e.message) || String(e)
+          });
+        }
+      });
+      return rec.save({ ignoreMandatoryFields: true, enableSourcing: false });
+    };
+
     const util = {
       normStatus, statusEntry, syncStatusNames, scannableStatusNames,
       uuid, canonical, canonicalCompare, COMPARE_IGNORE,
       samePayload, formEncode, encodeBody, stripCompare, COMPARE_KEY,
-      clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged
+      clip, safeJson, isoUtc, truthy, blank, onlySyncFieldsChanged,
+      writeFields, LOAD_AND_SAVE
     };
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -151,10 +151,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
 
       try {
-        record.submitFields({
-          type: C.REC.LOG, id: o.id, values: clean,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(C.REC.LOG, o.id, clean, { ignoreMandatoryFields: true });
         return true;
       } catch (e) {
         log.error({ title: 'RB sync log write failed, retrying essentials', details: e });
@@ -167,10 +164,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       if (!Object.keys(essential).length) return false;
 
       try {
-        record.submitFields({
-          type: C.REC.LOG, id: o.id, values: essential,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(C.REC.LOG, o.id, essential, { ignoreMandatoryFields: true });
         log.audit({
           title: 'RB sync log write recovered',
           details: { id: o.id, wrote: Object.keys(essential) }
@@ -259,11 +253,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
 
       // The main record's target payload always tracks the LATEST intent.
       try {
-        record.submitFields({
-          type: C.REC.LOG, id: open[0],
-          values: { [L.payload]: util.clip(payload || '', 100000) },
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(C.REC.LOG, open[0], { [L.payload]: util.clip(payload || '', 100000) }, { ignoreMandatoryFields: true });
       } catch (e) { /* non-fatal */ }
 
       if (open.length > 1) {
@@ -1042,10 +1032,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       });
 
       try {
-        record.submitFields({
-          type: unit.recordType, id: unit.recordId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
         log.error({
           title: 'RB stampTry ' + unit.recordType + '/' + unit.recordId,
@@ -1085,10 +1072,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           if (entry.fields.tryResult)
             v[entry.fields.tryResult] = lid(C.LIST.tryResult, C.TRY.FAIL_PRE_API);
           if (entry.fields.synced) v[entry.fields.synced] = false;
-          record.submitFields({
-            type: rec.type, id: rec.id, values: v,
-            options: { ignoreMandatoryFields: true }
-          });
+          util.writeFields(rec.type, rec.id, v, { ignoreMandatoryFields: true });
         } catch (inner) {
           log.error({ title: 'RB exception could not stamp the record', details: inner });
         }
@@ -1738,11 +1722,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       // Store the raw response on the record too, when capture allows it.
       if (closed.response) {
         try {
-          record.submitFields({
-            type: C.REC.LOG, id: logRec.id,
-            values: { [L.response]: closed.response },
-            options: { ignoreMandatoryFields: true }
-          });
+          util.writeFields(C.REC.LOG, logRec.id, { [L.response]: closed.response }, { ignoreMandatoryFields: true });
         } catch (e) { /* non-fatal */ }
       }
       log.debug("Returning result from call()", { result });
