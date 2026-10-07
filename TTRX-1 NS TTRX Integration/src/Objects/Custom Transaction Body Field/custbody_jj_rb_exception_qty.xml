@@ -1,4 +1,4 @@
-<transactionbodycustomfield scriptid="custbody_jj_rb_bin_transfer">
+<transactionbodycustomfield scriptid="custbody_jj_rb_exception_qty">
   <accesslevel>2</accesslevel>
   <aidescription></aidescription>
   <applyformatting>F</applyformatting>
@@ -9,7 +9,7 @@
   <bodydepositapplication>F</bodydepositapplication>
   <bodyexpensereport>F</bodyexpensereport>
   <bodyinventoryadjustment>F</bodyinventoryadjustment>
-  <bodyitemfulfillment>F</bodyitemfulfillment>
+  <bodyitemfulfillment>T</bodyitemfulfillment>
   <bodyitemfulfillmentorder>F</bodyitemfulfillmentorder>
   <bodyitemreceipt>T</bodyitemreceipt>
   <bodyitemreceiptorder>F</bodyitemreceiptorder>
@@ -28,21 +28,21 @@
   <defaultchecked>F</defaultchecked>
   <defaultselection></defaultselection>
   <defaultvalue></defaultvalue>
-  <description>Every Bin Transfer that has released stock from this Item Receipt&apos;s on-hold bin, in the order they happened. Maintained by the RapidBridge inbound write RESTlet on each inventory_release call, from the list the release ledger keeps (custbody_jj_rb_release_log). MULTISELECT, not a single link: a receipt verified in batches has several transfers, and a field holding only the most recent makes the earlier ones findable nowhere - the warehouse question is &quot;show me the transfers that released this receipt&quot;, not &quot;the last one&quot;.</description>
+  <description>The document&apos;s total shortfall - the sum of every line&apos;s Exception Quantity. One number a saved search can filter on and a reconciliation can compare with what TrackTraceRX expected, without opening the record. Written by the RapidBridge inbound write RESTlet on every document it creates, zero included; a blank means the document predates this field.</description>
   <displayheight></displayheight>
   <displaytype>LOCKED</displaytype>
   <displaywidth></displaywidth>
   <dynamicdefault></dynamicdefault>
   <enabletextenhance>F</enabletextenhance>
   <encryptatrest>F</encryptatrest>
-  <fieldtype>MULTISELECT</fieldtype>
+  <fieldtype>FLOAT</fieldtype>
   <fldsizelabel></fldsizelabel>
   <globalsearch>F</globalsearch>
-  <help>Every Bin Transfer that has released stock from this Item Receipt&apos;s on-hold bin, in the order they happened. Maintained by the RapidBridge inbound write RESTlet on each inventory_release call, from the list the release ledger keeps (custbody_jj_rb_release_log). MULTISELECT, not a single link: a receipt verified in batches has several transfers, and a field holding only the most recent makes the earlier ones findable nowhere - the warehouse question is &quot;show me the transfers that released this receipt&quot;, not &quot;the last one&quot;.</help>
+  <help>The document&apos;s total shortfall - the sum of every line&apos;s Exception Quantity. One number a saved search can filter on and a reconciliation can compare with what TrackTraceRX expected, without opening the record. Written by the RapidBridge inbound write RESTlet on every document it creates, zero included; a blank means the document predates this field.</help>
   <isformula>F</isformula>
   <ismandatory>F</ismandatory>
   <isparent>F</isparent>
-  <label>Release Bin Transfers</label>
+  <label>Exception Quantity</label>
   <linktext></linktext>
   <maxlength></maxlength>
   <maxvalue></maxvalue>
@@ -52,9 +52,9 @@
   <searchcomparefield></searchcomparefield>
   <searchdefault></searchdefault>
   <searchlevel>2</searchlevel>
-  <selectrecordtype>-30</selectrecordtype>
+  <selectrecordtype></selectrecordtype>
   <showhierarchy>F</showhierarchy>
-  <showinlist>F</showinlist>
+  <showinlist>T</showinlist>
   <sourcefilterby></sourcefilterby>
   <sourcefrom></sourcefrom>
   <sourcelist></sourcelist>

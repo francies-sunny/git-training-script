@@ -12,7 +12,7 @@
   <issinglesignononly>F</issinglesignononly>
   <issupportrole>F</issupportrole>
   <iswebserviceonlyrole>F</iswebserviceonlyrole>
-  <name>TrackTrace Integration Role</name>
+  <name>RapidBridge Integration Role</name>
   <parentrolescriptid></parentrolescriptid>
   <restrictbydevice>F</restrictbydevice>
   <restricttimeandexpenses>F</restricttimeandexpenses>
@@ -22,8 +22,16 @@
   <tfarequired>OFF</tfarequired>
   <permissions>
     <permission>
+      <permkey>TRAN_BINTRNFR</permkey>
+      <permlevel>EDIT</permlevel>
+    </permission>
+    <permission>
       <permkey>TRAN_FIND</permkey>
       <permlevel>VIEW</permlevel>
+    </permission>
+    <permission>
+      <permkey>TRAN_SALESORDFULFILL</permkey>
+      <permlevel>EDIT</permlevel>
     </permission>
     <permission>
       <permkey>TRAN_ITEMSHIP</permkey>

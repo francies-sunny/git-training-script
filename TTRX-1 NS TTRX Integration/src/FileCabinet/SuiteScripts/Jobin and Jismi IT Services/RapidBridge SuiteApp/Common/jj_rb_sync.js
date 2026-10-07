@@ -761,13 +761,98 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /** The address fields that belong in the parent's comparison. */
 
+    /**
+     * §10.6 — BIN -> storage_area.
+     *
+     * ── WHAT IS NOT IN THE BODY ───────────────────────────────────────────
+     *
+     * The location. It is a PATH segment, not a field:
+     * `POST /locations/{locationUuid}/storage_areas`. That is why a bin whose
+     * location has no UUID cannot be sent at all, rather than being sent with
+     * a blank parent the way a sub-customer could be.
+     *
+     * ── PROPERTIES ────────────────────────────────────────────────────────
+     *
+     * A SEMICOLON-SEPARATED STRING. Not an array, not a list, and an empty
+     * string - never null - when the bin has no special conditions. Design
+     * §10.3 names this the field most likely to be got wrong, so the value is
+     * built from the multi-select's TEXT, uppercased, deduplicated and
+     * ordered as C.BIN_PROPS orders it: a re-ordered multi-select must not
+     * look like an edit and fire a pointless update.
+     */
+    const buildBin = (unit, cfg, entry) => {
+      const f = entry.fields;
+      const d = unit.data;
+
+      return {
+        custom_uuid: txt(unit.storedUuid),
+        name: txt(d.binnumber),
+        properties: binProperties(unit, entry).values.join(';'),
+        // TRUE unless this account handles pharmaceutical storage conditions.
+        //
+        // USE DOSAGE FORMS IS THE PHARMA SWITCH this SuiteApp already has -
+        // an account that maintains dosage forms is one whose stock has
+        // storage conditions worth enforcing. There is no dedicated
+        // "enforce storage conditions" setting, and inventing a second
+        // pharma flag that a client could set inconsistently with the first
+        // is worse than reading the one that exists.
+        //
+        // Get it backwards either way and it is quiet: FALSE on a client who
+        // never asked for cold-chain checks has TrackTrace refusing their
+        // receipts; TRUE on a pharmaceutical client silently removes the
+        // check they are relying on. Say so when it is sent.
+        is_storage_conditions_verification_disabled: cfg.useDosage !== true,
+        is_active: !util.truthy(d.isinactive),
+        // Optional in the API. NetSuite's Bin has no code field of its own, so
+        // the memo is where a client keeps one; empty is a legitimate value
+        // and the key still travels.
+        code: txt(d.memo)
+      };
+    };
+
+    /**
+     * The bin's storage properties, validated before they are sent.
+     *
+     * The multi-select is over a custom list an administrator can add to, and
+     * TrackTrace answers an unknown value with STORAGE_AREA_INVALID_PROPERTY -
+     * a business error, on a work item, after the call has been spent. Saying
+     * which value is wrong here is cheaper and far more useful.
+     *
+     * It does NOT throw. A builder that throws escapes run() into the User
+     * Event, and a save that errors out is a far worse answer than a work
+     * item: the preflight gate below turns `bad` into one a person can act on.
+     */
+    const binProperties = (unit, entry) => {
+      const raw = unit.data[entry.fields.props];
+      const list = Array.isArray(raw)
+        ? raw
+        : (util.blank(raw) ? [] : String(raw).split(/[;,]/));
+
+      const seen = {};
+      const bad = [];
+      list.forEach((v) => {
+        const k = String((v && v.text) || v || '').trim().toUpperCase()
+          .replace(/[\s-]+/g, '_');
+        if (!k) return;
+        if (C.BIN_PROPS.indexOf(k) === -1) { bad.push(k); return; }
+        seen[k] = true;
+      });
+
+      return {
+        // C.BIN_PROPS order, not the order the multi-select happens to hold
+        // them in - otherwise re-ordering the selection looks like an edit.
+        values: C.BIN_PROPS.filter((k) => seen[k]),
+        bad: bad
+      };
+    };
+
     const builders = {
       dosage: buildDosageForm,
       location: buildLocation,
       entity: buildPartner,
       item: buildProduct,
-      address: buildAddress
-      // bin: declared in C.MASTER, not yet built. See run().
+      address: buildAddress,
+      bin: buildBin
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -971,6 +1056,48 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           }
         }
 
+        // ══ THE BIN'S LOCATION IS PART OF THE URL ═══════════════════════
+        //
+        // Not a parent to name in the body - a SEGMENT of the address:
+        //   POST /locations/{locationUuid}/storage_areas
+        //
+        // `entry.parentField` above cannot express this, because that
+        // mechanism writes the parent into the payload. An empty value here
+        // does not produce a weaker call; it produces `/locations//storage_
+        // areas`, which fails in a way nobody can diagnose from the log.
+        // buildUrl throws on a blank segment, and this check is what stops
+        // it ever getting that far.
+        if (entry.key === 'BIN') {
+          const locId = textOf(unit.data.location);
+          const locUuid = locId
+            ? ensureParentLocation(locId, cfg, correlation) : '';
+          if (!locUuid) {
+            logIo.openDeferred({
+              entry: entry, unit: unit, cfg: cfg,
+              reason: C.REASON.MISSING_PARENT,
+              status: C.STATUS.OPEN_PENDING,   // resolves once the location syncs
+              outcome: C.OUTCOME.SKIPPED,
+              trigger: trigger,
+              note: locId
+                ? 'Location ' + locId + ' has no Middleware UUID yet, and a ' +
+                  'storage area is addressed THROUGH its location.'
+                : 'This bin names no location, so there is no path to send ' +
+                  'it to.',
+              correlation: correlation
+            });
+            logIo.stampTry(unit, C.TRY.BLOCK_NO_PARENT, null,
+              locId
+                ? 'The location (' + locId + ') has no Middleware UUID yet. A ' +
+                  'storage area is created UNDER a location - its identifier ' +
+                  'is in the URL - so the location must sync first.'
+                : 'This bin has no location. A storage area cannot be ' +
+                  'addressed without one.');
+            results.push({ ok: false, blocked: 'location not synced' });
+            return;
+          }
+          unit.pathParams = { locationUuid: locUuid };
+        }
+
         const payload = builders[entry.builder](unit, cfg, entry);    // step 2
         // step 3. The COMPARISON string leaves custom_uuid out: it is empty on
         // the create and holds the TrackTrace UUID afterwards, so including it
@@ -1032,6 +1159,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           mirrorUomRow(unit, { uuid: prior.uuid });
           if (unit.uuidField) {
             try {
+              log.debug("Write Adopted UUID to record", { type: unit.recordType, id: unit.recordId, field: unit.uuidField, value: prior.uuid });
               record.submitFields({
                 type: unit.recordType, id: unit.recordId,
                 values: { [unit.uuidField]: prior.uuid },
@@ -1157,7 +1285,11 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const res = client.call({                                        // step 6
           entry: entry, unit: unit, cfg: cfg, target: target,
           endpoint: unit.storedUuid ? entry.endpoints.update : entry.endpoints.create,
-          pathParams: { uuid: unit.storedUuid },
+          // `uuid` plus whatever else the type's path needs. A bin's path
+          // carries its LOCATION's identifier as well, and nothing else in
+          // the dispatch table does - so the extra segments travel on the
+          // unit rather than being special-cased here.
+          pathParams: Object.assign({ uuid: unit.storedUuid }, unit.pathParams || {}),
           body: sendBody, operation: operation, payload: payloadStr,
           trigger: trigger, correlation: correlation, requestUuid: correlation
         });
@@ -1432,6 +1564,39 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
     /** Gates that belong to one record type and stop the call before it is built. */
     const preflight = (entry, unit, cfg) => {
+      // ══ A FEATURE-GATED TYPE, WITH THE FEATURE OFF ══════════════════════
+      //
+      // Bin is the only one today. Design §10.4: "Nothing runs. No call, no
+      // work item, no backlog." An account that does not use bins must not
+      // accumulate a silent pile of failed bin work items, and turning the
+      // switch on later produces a backlog of `Never synced` the sweep picks
+      // up - which is the behaviour wanted, not a bug to design around.
+      if (entry.featureFlagKey && cfg[entry.featureFlagKey] !== true)
+        return {
+          tryResult: C.TRY.SKIP_FEATURE,
+          reason: entry.key + ' sync is gated on a feature that is switched ' +
+            'off in the RapidBridge Configuration'
+        };
+
+      // A storage property TrackTraceRX does not know comes back as
+      // STORAGE_AREA_INVALID_PROPERTY - a business error, on a work item,
+      // after the call has been spent. Catch it here instead, and say which
+      // value is wrong: nothing about this bin can sync until the list is
+      // corrected, so it earns a row (§12.9).
+      if (entry.key === 'BIN') {
+        const props = binProperties(unit, entry);
+        if (props.bad.length)
+          return {
+            tryResult: C.TRY.FAIL_PRE_API,
+            reason: 'unknown storage property', needsHuman: true,
+            note: 'Storage Properties on this bin carries ' +
+              props.bad.join(', ') + ', which TrackTraceRX does not accept. ' +
+              'The only values it knows are ' + C.BIN_PROPS.join(', ') + '. ' +
+              'Correct the value on the bin, or remove it from the Bin ' +
+              'Property list.'
+          };
+      }
+
       if (entry.key === 'DOSAGE') {
         // System rows exist for NetSuite users; the Middleware owns its defaults.
         if (util.truthy(unit.data[entry.fields.isDefault]))
@@ -1537,7 +1702,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
       const res = client.call({
         entry: entry, unit: unit, cfg: cfg, target: target,
-        endpoint: entry.endpoints.remove, pathParams: { uuid: unit.storedUuid },
+        endpoint: entry.endpoints.remove,
+        // Same rule as the create and the update: a bin's delete path carries
+        // its location too. Built from the unit so no type is special-cased.
+        pathParams: Object.assign({ uuid: unit.storedUuid }, unit.pathParams || {}),
         body: null, operation: C.OPERATION.DELETE, payload: '',
         trigger: trigger, correlation: correlation, requestUuid: correlation
       });
@@ -1758,6 +1926,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (unit.tryResultField)
         values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.SYNCED);
 
+      log.debug("Submitting fields to record", { details: { type: unit.recordType, id: unit.recordId, values: values } });
+
       try {
         record.submitFields({
           type: unit.recordType, id: unit.recordId, values: values,
@@ -1940,6 +2110,30 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     /** Kept for callers that name the Location case directly. */
     const ensureParentLocation = (parentId, cfg, correlation) =>
       ensureParentRecord(C.MASTER.location, 'location', parentId, cfg, correlation);
+
+    /**
+     * A location's stored UUID, READ ONLY. No sync, no cascade.
+     *
+     * For the one caller that must not create anything: a bin being DELETED.
+     * Syncing a location because a bin under it was removed would create a
+     * remote object as a side effect of a deletion, which is the opposite of
+     * what the user asked for.
+     */
+    const storedLocationUuid = (locationId) => {
+      try {
+        const v = search.lookupFields({
+          type: 'location', id: locationId,
+          columns: [C.MASTER.location.fields.uuid]
+        });
+        return textOf(v[C.MASTER.location.fields.uuid]);
+      } catch (e) {
+        log.audit({
+          title: 'RB storedLocationUuid could not read location/' + locationId,
+          details: (e && e.message) || String(e)
+        });
+        return '';
+      }
+    };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Addresses — §10.5
@@ -3023,19 +3217,58 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         return [];
       }
 
+      // ══ A DELETED BIN IS STILL ADDRESSED THROUGH ITS LOCATION ═════════
+      //
+      // The NetSuite record is going; its location field goes with it, and
+      // the DELETE path needs that location's UUID. Read it off oldRecord
+      // while it is still there, and look the UUID up WITHOUT syncing: this
+      // is a deletion, not a reason to create a location remotely.
+      let binPath = null;
+      if (entry.key === 'BIN') {
+        let locId = '';
+        try { locId = textOf(oldRecord.getValue({ fieldId: 'location' })); }
+        catch (e) { locId = ''; }
+        const locUuid = locId ? storedLocationUuid(locId) : '';
+        if (!locUuid) {
+          logIo.recordNoCall({
+            entry: entry, unit: subject, cfg: cfg,
+            operation: C.OPERATION.DELETE,
+            status: C.STATUS.CLOSED_CANCELLED, outcome: C.OUTCOME.SKIPPED,
+            trigger: C.TRIGGER.INITIAL, correlation: correlation,
+            reason: C.REASON.AWAITING_DECISION,
+            note: 'The bin was deleted in NetSuite. Its storage area is ' +
+              'addressed through its location, and location ' +
+              (locId || '(none)') + ' has no Middleware UUID, so no delete ' +
+              'could be sent.',
+            suggested: 'If a storage area exists in TrackTraceRX for this ' +
+              'bin, remove it by hand. Nothing in NetSuite points at it any ' +
+              'more.'
+          });
+          return [];
+        }
+        binPath = { locationUuid: locUuid };
+      }
+
       const units = resolveDeleteUuids(entry, oldRecord, cfg);
 
       if (!units.length) {
-        // Not an error, and it still has to be visible: the master record is
-        // gone, so the log is the only place this can be recorded.
-        logIo.recordNoCall({
-          entry: entry, unit: subject, cfg: cfg,
-          operation: C.OPERATION.DELETE,
-          status: C.STATUS.CLOSED_NO_ACTION, outcome: C.OUTCOME.SKIPPED,
-          trigger: C.TRIGGER.INITIAL, correlation: correlation,
-          note: 'The record was deleted in NetSuite. No Middleware UUID could ' +
-            'be found for it in the record or in the Sync Log, so it had ' +
-            'never been accepted remotely and there was nothing to delete.'
+        // ── NO SYNC LOG ROW. C.LOG_REASON: no call, no error, nothing anybody
+        //    must act on. A record that was never accepted remotely has been
+        //    deleted locally, and the correct remote action was to do nothing -
+        //    which is what happened.
+        //
+        //    v1.0 wrote a closed row here. On a go-live that imports and then
+        //    tidies up, or on any account that deletes draft records, that is
+        //    one row per deletion saying the integration had no opinion. The
+        //    execution log records it; the worklist does not need to.
+        log.audit({
+          title: 'RB delete — never synced, nothing to remove',
+          details: {
+            recordType: oldRecord.type, recordId: oldRecord.id,
+            entry: entry.key,
+            note: 'No Middleware UUID in the record or the Sync Log, so it was ' +
+              'never accepted remotely and there was nothing to delete.'
+          }
         });
         return [];
       }
@@ -3062,7 +3295,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         const res = client.call({
           entry: entry, unit: unit, cfg: cfg, target: target,
-          endpoint: entry.endpoints.remove, pathParams: { uuid: u.uuid },
+          endpoint: entry.endpoints.remove,
+          pathParams: Object.assign({ uuid: u.uuid }, binPath || {}),
           body: null, operation: C.OPERATION.DELETE, payload: '',
           trigger: C.TRIGGER.INITIAL, correlation: correlation,
           requestUuid: correlation

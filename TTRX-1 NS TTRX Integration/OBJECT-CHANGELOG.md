@@ -1965,3 +1965,234 @@ started this, partial-then-the-rest, over-asking capped at what is left, two lin
 submission racing each other, a lot from another receipt in the same bin, the same uuid answered
 from the ledger, a corrupt ledger, an unreadable receipt, the `record.load` fallback, a
 non-tracked item, and the ledger write failing out loud.
+
+---
+
+## Pass 25 — eligibility decides, bins are mandatory, and a shortfall is a number
+
+`jj_rb_core.js` · `jj_rb_txn.js` · `jj_rl_rb_write.js` · 3 objects · `t8.js` · `t13.js`.
+
+Four corrections, and three of them are the same correction: **the integration has to know which
+lines it is responsible for.**
+
+### `readItems` learns eligibility
+
+The inbound write path never read the eligibility field. It knew lot, serial, bins and active, and
+nothing about whether TrackTraceRX tracks the item — so every rule below was impossible to state.
+
+It is read through the **configured** field, the same way `jj_rb_txn.classifyLines` and the read
+RESTlet read it; `eligibleValue` is now exported from `jj_rb_txn.js` so there is **one** reading of
+that field, not three. A field that is not deployed on every item type falls back to a search
+without it and says so — `eligible` is then `undefined`, which the gates treat as not eligible.
+
+### 1. No release for a non-eligible item
+
+A non-eligible item never goes to a hold bin, never waits for verification and has nothing to
+release. Two consequences, and the second is the one that mattered:
+
+| | |
+|---|---|
+| A release line naming one | `NOT_ELIGIBLE`. *"it was never held … the stock is already where the receipt put it"* |
+| The **ledger** | Non-eligible entitlements are **dropped at seed time** |
+
+Keeping them would have been worse than useless: `held_quantity` counts `received − released`
+across the whole receipt, so untrackable stock nobody is ever going to release would have kept
+every receipt permanently part-released, and every release on it permanently on the worklist. The
+seed records how many it dropped, so a reader is not left wondering where the lines went.
+
+### 2. A bin is mandatory on an eligible line
+
+Not a preference. The hold-then-release flow is built on knowing which bin the stock is in: a
+receipt that lands it wherever NetSuite defaults leaves `inventory_release` with no bin to move it
+out of, and the goods sit unreleasable with nothing saying why.
+
+| | |
+|---|---|
+| **Receipt** | Payload `bin` → the location's On-Hold Bin → the config Default Bin. None of the three ⇒ `BIN_REQUIRED` |
+| **Fulfilment** | Payload `bin` only. There is no default — stock is being **issued**, and only the device knows which bin it was picked from |
+| **Non-eligible line** | Left to NetSuite, with an audit line. Not tracked, never held, never released |
+
+It refuses the submission, which under rule 1 means nothing is created — and the refusal already
+writes an `Open - Needs Review` row. That is the "exception and review sync section": the work item
+exists, the document does not, and the retry is clean.
+
+The old gate was `usesHoldBin && useBins && info.useBins` — receipt-only, and keyed on the item's
+bin flag rather than on whether this integration cares about the line.
+
+### 3. The bin transfers are a LIST
+
+`custbody_jj_rb_bin_transfer` was TEXT holding the last transfer's id. A receipt verified in
+batches has several, and the earlier ones were findable nowhere.
+
+Now **MULTISELECT** of transactions, carrying every transfer that has released against the
+receipt. The list is kept in the ledger as `bts` — separate from `calls`, because `calls` is
+capped at 50 and losing an id would unlink a transfer that really happened. `bin_transfers` is on
+the release response too.
+
+The warehouse question is *"show me the transfers that released this receipt"*, not *"the last
+one"*.
+
+### 4. The shortfall is a number
+
+`exception_reason` says why a line came up short and `exception_note` says it in prose. Neither
+can be totalled, filtered, or compared against what TrackTraceRX expected — and comparison is the
+whole point of recording an exception.
+
+| | |
+|---|---|
+| `custcol_jj_rb_exception_qty` | Per line: outstanding − submitted |
+| `custbody_jj_rb_exception_qty` | The document's total |
+
+**Written on every line, zero included.** A blank then means the line predates the field, not that
+nothing was short — which is the difference between a reconciliation that can be trusted and one
+that cannot.
+
+The payload may state `exception_quantity`; the **derived** figure wins, because the order is the
+authority on what was outstanding, and a disagreement is audited rather than silently accepted.
+
+**A short ELIGIBLE line must carry a reason** — `EXCEPTION_REASON_REQUIRED`, naming
+`fulfilment_exceptions` as the source of valid values. A shortfall on a regulated product is a
+discrepancy somebody has to account for, and an unexplained one cannot be reconciled afterwards.
+On a non-eligible line the number alone is enough.
+
+The response gained `exception_quantity` and `exception_lines[]`; the Sync Log row stays **closed**
+— nothing failed — but its `suggested` names the shortfall line by line, so the reconciliation page
+finds it without reopening the record.
+
+### Objects
+
+| | |
+|---|---|
+| `custcol_jj_rb_exception_qty` | **New.** Decimal, Item Receipt + Item Fulfilment, locked |
+| `custbody_jj_rb_exception_qty` | **New.** Decimal, both documents, locked |
+| `custbody_jj_rb_bin_transfer` | **Changed.** TEXT → MULTISELECT of transactions, relabelled *Release Bin Transfers* |
+
+New codes: `C.LINE_ERR.BIN_REQUIRED`, `NOT_ELIGIBLE`, `EXCEPTION_REASON_REQUIRED`;
+`C.LINE.exceptionQty`; `C.TXN.exceptionQty`.
+
+### Noted, not touched
+
+`custcol_jj_rb_hold_qty`, `custcol_jj_rb_release_bin`, `custcol_jj_rb_released_on` and
+`custcol_jj_rb_released_qty` are still in the SDF from the v3.0 inventory-status design. **No code
+reads or writes any of them** — the release is tracked on the body, per lot, in the ledger. They
+should be deleted or wired up; leaving four line columns that are always blank on a form teaches a
+user to distrust the ones that are not.
+
+742 assertions across 13 suites. `t8` grew to 81 with the mandatory-bin gate on both directions and
+the exception quantity end to end; `t13` to 157 with the non-eligible release refusal, the
+non-eligible stock that must NOT count as held, and two releases linking two transfers.
+
+### Also delivered
+
+`if_payload_so610.md` — the Item Fulfilment test payloads for SO610 (16853): full, tracked-lines-
+only and short-pick, with the eight negative tests and the five values to substitute. Line 2
+(item 721) is the non-eligible case and line 1 is in Pallets at a rate of 16, so `quantity: 1`
+means one pallet and the inventory detail must add up to **1**, not 16.
+
+---
+
+## Pass 26 — Bin → storage_area: the master record whose parent is in the URL
+
+`jj_rb_core.js` · `jj_rb_sync.js` · `customscript_jj_ue_rb_master.xml` · `t14.js` · `syharness.js`.
+
+The last unbuilt **master data** type. Design v1.1 §10, Guide v3.3 §10.7. It was declared in
+`C.MASTER` from the first build with `implemented: false`, and `run()` refused it by name.
+
+### What makes a bin different from every other master record
+
+```
+POST /locations/{locationUuid}/storage_areas
+PUT  /locations/{locationUuid}/storage_areas/{uuid}
+```
+
+**The location is not a parent to name — it is the ADDRESS of the call.** Every other
+hierarchical type (`location.parent`, a sub-customer) writes its parent into the *body* through
+`entry.parentField`, and a parent that has not synced yet produces a weaker payload. Here a
+missing location produces `/locations//storage_areas`, which fails in a way nobody can diagnose
+from a log.
+
+So the bin gets its own pre-sync, before the payload is built:
+
+| | |
+|---|---|
+| Location has a UUID | Proceed |
+| Location has none | `ensureParentLocation` syncs it first |
+| Still none | **No call.** `Blocked - missing parent UUID`, work item `Open - Pending Retry`, which resolves when the location syncs |
+| Bin names no location at all | Same, and the message says so |
+
+The extra segment travels on `unit.pathParams` and is merged into the call — create, update **and**
+delete — rather than being special-cased at each of the three call sites. `buildUrl` already throws
+on a blank segment; this check is what stops it ever getting that far.
+
+### `properties` — the field the design says is most often got wrong
+
+**A semicolon-separated STRING.** Not an array, not a list, and an **empty string** — never null —
+when the bin has no special conditions.
+
+`custrecord_jj_rb_bin_props` is a multi-select over `customlist_jj_rb_bin_property`, which an
+administrator can add values to. TrackTraceRX accepts exactly three, so `C.BIN_PROPS` holds them
+and the gate runs **before** the call:
+
+```
+Storage Properties on this bin carries CHILLED, which TrackTraceRX does not accept.
+The only values it knows are COLD, FROZEN, RESTRICTED_ACCESS. Correct the value on
+the bin, or remove it from the Bin Property list.
+```
+
+Otherwise it comes back as `STORAGE_AREA_INVALID_PROPERTY` — a business error on a work item,
+after the call has been spent, naming nothing a user can act on.
+
+The check lives in **`preflight`, not the builder**. A builder that throws escapes `run()` into the
+User Event, and a save that errors out is a far worse answer than a work item.
+
+Values are emitted in `C.BIN_PROPS` order, not the order the multi-select happens to hold them in —
+otherwise re-ordering a selection looks like an edit and fires a pointless update.
+
+### The feature gate, which did not exist
+
+`C.MASTER.bin` carried `featureFlag: CFG.useBins` from the first build and **nothing read it**.
+`preflight` now gates on `entry.featureFlagKey`:
+
+> Design §10.4 — *"Nothing runs. No call, no work item, no backlog."*
+
+Stamped `Skipped - feature disabled`. An account that does not use bins must not accumulate a
+silent pile of failed bin work items, and turning the switch on later produces a backlog of
+*Never synced* that the sweep picks up — which is the wanted behaviour, not a bug to design around.
+
+### `is_storage_conditions_verification_disabled`
+
+`true` unless the account handles pharmaceutical storage conditions. There is **no dedicated
+setting**, so it reads **Use Dosage Forms** — the one pharma switch this SuiteApp has. Inventing a
+second pharma flag a client could set inconsistently with the first would be worse.
+
+Get it backwards and it is quiet either way: `false` on a client who never asked for cold-chain
+checks has TrackTrace refusing their receipts; `true` on a pharmaceutical client silently removes
+the check they are relying on. Worth a dedicated config field eventually — noted below.
+
+### Delete
+
+A deleted bin is still addressed through its location, and the location field goes with the record.
+`runDelete` reads it off `oldRecord` while it is still there and resolves the UUID with
+**`storedLocationUuid` — a read, with no cascade.** Syncing a location because a bin under it was
+removed would create a remote object as a side effect of a deletion. No location UUID ⇒ no call and
+a NOTICE row saying the storage area, if any, is now an orphan.
+
+### Objects
+
+`customdeploy_jj_ue_rb_bin` added to `customscript_jj_ue_rb_master` — `recordtype BIN`, same
+execution contexts as the location deployment. The UE itself needed no change: it resolves
+`C.MASTER[recordType]` and knows nothing about any particular type.
+
+All eight `custrecord_jj_rb_bin_*` fields and `customlist_jj_rb_bin_property` were already in the
+SDF from the first build.
+
+### A new harness
+
+`syharness.js` — the first one that loads **`jj_rb_sync.js` itself**. Every other harness stubs the
+sync engine out, which is why a whole master-data type could sit unbuilt with a green suite.
+
+795 assertions across 14 suites. `t14` (52) covers the dispatch entry, a create with the location in
+the path and **not** in the body, the semicolon string in all four shapes, the unknown-property
+gate, both sides of the pharma flag, Use Bins off, the location cascade and its blocked case, update
+versus no-change, inactivation, and that `custom_uuid` travels in the body but stays out of the
+comparison string.

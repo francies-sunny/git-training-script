@@ -1436,7 +1436,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
             // versus a resolved name the UOM table has no row for.
             (m.unitResolved
               ? ' (the line reads "' + m.unitAsEntered + '", resolved from the ' +
-                'item\'s Units Type)'
+              'item\'s Units Type)'
               : '') +
             (m.available.length
               ? ' (the item has rows for: ' + m.available.join(', ') + ')'
@@ -1929,11 +1929,11 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       // them looking for a release that is never coming.
       const note = (row && row.terminal)
         ? 'Not sent: this order is ' + row.name + ', so it is finished and ' +
-          'nothing further will be sent for it. Re-open it if it should ' +
-          'synchronize again. This is not an error.'
+        'nothing further will be sent for it. Re-open it if it should ' +
+        'synchronize again. This is not an error.'
         : 'Not sent: this order is not yet in a status from which it can be ' +
-          'synchronized. It will be sent as soon as it reaches one of: ' +
-          util.syncStatusNames(recordType).join(', ') + '. This is not an error.';
+        'synchronized. It will be sent as soon as it reaches one of: ' +
+        util.syncStatusNames(recordType).join(', ') + '. This is not an error.';
 
       logIo.stampTry(stampUnit(entry, recordType, recordId),
         C.TRY.DEFER_APPROVAL, null, note);
@@ -1941,6 +1941,11 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
     return {
       run, builders, entryFor, named,
+      // The one true reading of the eligibility field, exported so the
+      // inbound RESTlet reads it exactly as the outbound classification
+      // does. Two readings of one field is how a line gets treated as
+      // tracked on the way out and untracked on the way in.
+      eligibleValue,
       classifyLines, filterLines, resolveProducts, atSyncStatus,
       lockSyncFields, clearAllSyncFields,
       needsClose, runClose, runDelete,

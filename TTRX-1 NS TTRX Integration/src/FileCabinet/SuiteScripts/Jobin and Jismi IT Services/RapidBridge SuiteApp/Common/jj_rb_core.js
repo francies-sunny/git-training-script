@@ -495,7 +495,22 @@ define(['N/search', 'N/record'],
       // released. The commonest shape of a duplicate call.
       ALREADY_RELEASED: 'ALREADY_RELEASED',
       // Some of it is still releasable, but not as much as was asked for.
-      QTY_EXCEEDS_RECEIVED: 'QTY_EXCEEDS_RECEIVED'
+      QTY_EXCEEDS_RECEIVED: 'QTY_EXCEEDS_RECEIVED',
+      // ── BINS ARE MANDATORY FOR AN ELIGIBLE LINE ──────────────────────
+      // Not BIN_NOT_ALLOWED, which means "that bin is wrong". This means
+      // "no bin at all, and this line is not allowed to go without one".
+      // An eligible item is one TrackTraceRX tracks; letting it land
+      // wherever NetSuite defaults breaks the hold-then-release flow before
+      // it starts, because the release has no bin to move it out of.
+      BIN_REQUIRED: 'BIN_REQUIRED',
+      // A release line naming an item this integration does not track.
+      // There is nothing to release: a non-eligible item never goes to a
+      // hold bin and never waits for verification.
+      NOT_ELIGIBLE: 'NOT_ELIGIBLE',
+      // A short line on an ELIGIBLE item with no declared reason. A
+      // shortfall on a regulated product is a discrepancy somebody has to
+      // account for, and an unexplained one cannot be reconciled later.
+      EXCEPTION_REASON_REQUIRED: 'EXCEPTION_REASON_REQUIRED'
     });
 
     /** DOCUMENT-level error codes — a failure that is not about one line. */
@@ -699,6 +714,22 @@ define(['N/search', 'N/record'],
      */
     const IF_STATUS = Object.freeze({ Picked: 'A', Packed: 'B', Shipped: 'C' });
 
+    /**
+     * The storage properties TrackTraceRX accepts, and the ONLY ones.
+     *
+     * `custrecord_jj_rb_bin_props` is a multi-select over
+     * customlist_jj_rb_bin_property, which an administrator can add values to.
+     * A value TrackTrace does not know comes back as
+     * STORAGE_AREA_INVALID_PROPERTY - a business error on a work item nobody
+     * expected - so the builder checks the list it is about to send and says
+     * which value is wrong BEFORE spending the call.
+     *
+     * SENT SEMICOLON-SEPARATED, never as an array. Design §10.3 calls this
+     * "the field most likely to be got wrong"; a bin with no special
+     * conditions sends an EMPTY STRING, not an empty list and not a null.
+     */
+    const BIN_PROPS = Object.freeze(['COLD', 'FROZEN', 'RESTRICTED_ACCESS']);
+
     /** What the inbound path writes into `custbody_jj_rb_origin`. */
     const ORIGIN_MW = 'MIDDLEWARE';
 
@@ -732,6 +763,9 @@ define(['N/search', 'N/record'],
       STORAGE_AREAS: { method: 'GET', path: '/locations/{uuid}/storage_areas' },
       BIN_CREATE: { method: 'POST', path: '/locations/{locationUuid}/storage_areas' },
       BIN_UPDATE: { method: 'PUT', path: '/locations/{locationUuid}/storage_areas/{uuid}' },
+      // Same path, DELETE. Reached only by Inactivate Method = DELETE, the
+      // same policy that deletes a product or a location.
+      BIN_DELETE: { method: 'DELETE', path: '/locations/{locationUuid}/storage_areas/{uuid}' },
       // Not called by anything. The address payload sends the state as the
       // NetSuite record spells it; nothing is resolved to an id. Kept in the
       // catalogue because this file is the one place an endpoint is written.
@@ -846,7 +880,11 @@ define(['N/search', 'N/record'],
       // `calls` is capped - see RELEASE_LEDGER. `lots` and `callCount` are
       // not, because they are the running totals and losing them loses the
       // guard.
-      releaseLog: 'custbody_jj_rb_release_log'
+      releaseLog: 'custbody_jj_rb_release_log',
+      // The document's total shortfall - the sum of every line's
+      // `custcol_jj_rb_exception_qty`. One number a saved search can filter
+      // and a reconciliation can compare against what TrackTraceRX expected.
+      exceptionQty: 'custbody_jj_rb_exception_qty'
     });
 
     /**
@@ -893,7 +931,15 @@ define(['N/search', 'N/record'],
       //    it creates; never by the outbound path. All three already existed.
       excReason: 'custcol_jj_rb_exception_reason',
       excNote: 'custcol_jj_rb_exception_note',
-      holdBin: 'custcol_jj_rb_hold_bin'
+      holdBin: 'custcol_jj_rb_hold_bin',
+      // ── THE SHORTFALL, AS A NUMBER ────────────────────────────────────
+      //    `excReason` says WHY a line came up short and `excNote` says it
+      //    in prose. Neither says HOW MUCH, and "how much" is the only part
+      //    of an exception another system can compare, total or reconcile.
+      //    Written on every line this integration creates: zero when the
+      //    line was received or fulfilled in full, so a blank means the
+      //    line predates this field rather than "nothing was short".
+      exceptionQty: 'custcol_jj_rb_exception_qty'
     });
 
     /**
@@ -1003,9 +1049,32 @@ define(['N/search', 'N/record'],
       customer: entityEntry('CUSTOMER'),
       vendor: entityEntry('VENDOR'),
 
+      /**
+       * BIN -> storage_area. Design v1.1 §10, Guide v3.3 §10.7.
+       *
+       * ── THE ONE THING THAT MAKES IT DIFFERENT ──────────────────────────
+       *
+       * The LOCATION'S identifier is in the URL PATH, not in the body:
+       *
+       *   POST /locations/{locationUuid}/storage_areas
+       *   PUT  /locations/{locationUuid}/storage_areas/{uuid}
+       *
+       * So the location is not merely a parent to name - it is part of the
+       * ADDRESS of the call. No location UUID, no call. `featureFlagKey`
+       * names the parsed config property; `featureFlag` holds the field id
+       * for anyone reading the dispatch table against the record.
+       *
+       * TrackTrace has a second level below a storage area - storage
+       * SHELVES. NetSuite's Bin maps to the first level only. Whether any
+       * client needs the second is open (Design §12).
+       */
       bin: {
-        key: 'BIN', syncType: SYNCTYPE.BIN, builder: 'bin', implemented: false,
-        featureFlag: CFG.useBins, logSubjectField: LOG.bin,
+        key: 'BIN', syncType: SYNCTYPE.BIN, builder: 'bin', implemented: true,
+        featureFlag: CFG.useBins, featureFlagKey: 'useBins',
+        logSubjectField: LOG.bin,
+        // The native columns. `location` is the one that matters: it supplies
+        // the path segment, and a bin cannot be addressed without it.
+        extraColumns: ['binnumber', 'location', 'inactive', 'memo'],
         fields: {
           uuid: 'custrecord_jj_rb_bin_uuid', payload: 'custrecord_jj_rb_bin_payload',
           synced: 'custrecord_jj_rb_bin_synced',
@@ -1014,7 +1083,9 @@ define(['N/search', 'N/record'],
           tryResult: 'custrecord_jj_rb_bin_try_result',
           error: 'custrecord_jj_rb_bin_error', props: 'custrecord_jj_rb_bin_props'
         },
-        endpoints: { create: EP.BIN_CREATE, update: EP.BIN_UPDATE }
+        endpoints: {
+          create: EP.BIN_CREATE, update: EP.BIN_UPDATE, remove: EP.BIN_DELETE
+        }
       },
 
       customrecord_jj_rb_uom_detail: {
@@ -1286,7 +1357,7 @@ define(['N/search', 'N/record'],
       TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
       // reads
       READ_ERR, READ_NOTE, READ_NOTE_REVIEW, READ_EXPECTED, READ_PAGE, LOG_REASON,
-      RELEASE_LEDGER
+      RELEASE_LEDGER, BIN_PROPS
     });
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,12 @@
+# Authentication
+NetSuite → Middleware: API Key
+Middleware → NetSuite: OAuth 2.0 – JWT Bearer Grant (Credentials will be shared)
+
 # Dosage Form
+Create Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms
+Update Endpoint: https://api.tracktraceweb.com/2.0/products/pharmaceutical/dosage_forms/{{tran_uuid}}
+Method: POST
+Payload:
 { 
   "code": "Test2", 
   "is_active": true, 
@@ -6,6 +14,10 @@
 }
 
 # Location
+Create Endpoint: https://api.tracktraceweb.com/2.0/locations
+Update Endpoint: https://api.tracktraceweb.com/2.0/locations/{{tran_uuid}}
+Method: POST
+Payload:
 {
     "create_default_storage_area": true,                              // Always true
     "custom_uuid": "TEST-UUID-00000001",
@@ -22,6 +34,10 @@
 }
 
 # Address
+Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}/addresses
+Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}/addresses/{{addr_uuid}}
+Method: POST
+Payload:
 {
     "address_gs1_id": "",                                             // Always Empty
     "address_nickname": "Test A BCD Label",                           // Address Label; 'Address N' by line when unlabelled
@@ -38,6 +54,10 @@
 }
 
 # Customer
+Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
+Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}
+Method: POST
+Payload:
 {
     "custom_uuid": "b5969a19-eacc-4b4b-a12a-9c2fde24722d",
     "name": "Test1",                                                    // Company Name; Alternate Name when Individual; else Entity ID
@@ -77,6 +97,10 @@
 }
 
 # Vendor
+Create Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/
+Update Endpoint: https://api.tracktraceweb.com/2.0/trading_partners/{{tran_uuid}}
+Method: POST
+Payload:
 {
     "custom_uuid": "346d2399-15c9-4acf-b047-0e06f7ed386e",
     "name": "Test 1",                                                   // Company Name; falls back to Entity ID
@@ -116,6 +140,10 @@
 }
 
 # Item/UOM Details
+Create Endpoint: https://api.tracktraceweb.com/2.0/products/
+Update Endpoint: https://api.tracktraceweb.com/2.0/products/{{tran_uuid}}
+Method: POST
+Payload:
 {
     custom_uuid: "",                                                    // Empty on create; the TrackTrace UUID on every later call
     type: "Pharmaceutical",                                             // From config or default to 'Pharmaceutical'
@@ -163,6 +191,10 @@
 }
 
 # Purchase Order Create/Update
+Create Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase
+Update Endpoint: https://api.tracktraceweb.com/2.0/transactions/purchase/{{tran_uuid}}
+Method: POST
+Payload:
 {
     "transaction_uuid": "f4efb87c-e483-4f31-b91c-dcfe21382bb6",
     "custom_id": "PO446",
@@ -189,6 +221,9 @@
 }
 
 # Sales Order Create/Update
+Endpoint: https://api.tracktraceweb.com/2.0/transactions/sales
+Method: POST
+Payload:
 {
       transaction_uuid: "",
       custom_id: "SO609",
@@ -216,6 +251,9 @@
 }
 
 # Item Receipt
+Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
+Method: POST
+Payload:
 {
     "operation": "item_receipt",
     "request_uuid": "11111111-2222-3333-4444-555555555555",
@@ -259,8 +297,78 @@
     ]
 }
 
+Response:
+{
+    "success": true,
+    "internal_id": 16453,
+    "external_id": "11111111-2222-3333-4444-555555555563",
+    "lines_posted": 1
+}
+
+# Item Fulfillment
+Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_write&deploy=customdeploy_jj_rl_rb_write
+Method: POST
+Payload:
+{
+  "operation": "item_fulfillment",
+  "request_uuid": "3f8c21b6-7d94-4e52-9a10-5b6c7d8e9f01",
+  "order_id": "16853",
+  "shipment_uuid": "b41e9c77-2a65-4f38-85d0-9c1e2f3a4b5c",
+  "transaction_date": "2026-10-05",
+  "memo": "SO610 full fulfilment - Postman test",
+  "lines": [
+    {
+      "line_unique_key": "1",
+      "item_id": "718",
+      "quantity": 1,
+      "bin": "50",
+      "inventory": [
+        {
+          "lot": "LOT-718-A",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "line_unique_key": "2",
+      "item_id": "721",
+      "quantity": 1,
+      "bin": "50",
+      "inventory": [
+        {
+          "lot": "LOT-721-A",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "line_unique_key": "3",
+      "item_id": "719",
+      "quantity": 2,
+      "bin": "50",
+      "inventory": [
+        {
+          "lot": "LOT-719-A",
+          "quantity": 2
+        }
+      ]
+    }
+  ]
+}
+
+Response:
+{
+    "success": true,
+    "internal_id": 16954,
+    "external_id": "3f8c21b6-7d94-4e52-9a10-5b6c7d8e9f02",
+    "lines_posted": 1,
+    "exception_quantity": 0,
+    "exception_lines": [],
+    "shipping_status": "Shipped"
+}
+
 # PO/SO List
-API: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=list_transactions&record_type=purchaseorder&location=13&page_size=50
+Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=list_transactions&record_type=purchaseorder&location=13&page_size=50
 Method: GET
 record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
 Response:
@@ -302,9 +410,9 @@ Response:
 }
 
 # PO/SO Detail
-API: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fetch_transaction&record_type=purchaseorder&internal_id=16352
+Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fetch_transaction&record_type=purchaseorder&internal_id=16352
 Method: GET
-record_type: 'purchaseorder' for purchase order and  'salesorder' for sales order
+record_type: 'purchaseorder' for purchase orders and 'salesorder' for sales orders
 Response:
 {
     "success": true,
@@ -382,6 +490,47 @@ Response:
             "pack_size": "Pack Size",
             "bin_id": "",
             "location_id": "13"
+        }
+    ]
+}
+
+# Item Fulfillment Exception
+Endpoint: https://td3113894.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=customscript_jj_rl_rb_read&deploy=customdeploy_jj_rl_rb_read&operation=fulfilment_exceptions
+Method: GET
+Respose:
+{
+    "success": true,
+    "list_id": "customlist_jj_rb_fulfil_exception",
+    "submit_as": "name",
+    "count": 7,
+    "exception_reasons": [
+        {
+            "id": "2",
+            "name": "Damaged on inspection"
+        },
+        {
+            "id": "3",
+            "name": "Expired or short-dated"
+        },
+        {
+            "id": "4",
+            "name": "Not found at the location"
+        },
+        {
+            "id": "7",
+            "name": "Other - raise an investigation"
+        },
+        {
+            "id": "6",
+            "name": "Quantity mismatch on count"
+        },
+        {
+            "id": "5",
+            "name": "Serial mismatch"
+        },
+        {
+            "id": "1",
+            "name": "Short stock at the bin"
         }
     ]
 }

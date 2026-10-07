@@ -467,7 +467,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       //    lookups is forty-eight reads on the tightest budget in the SuiteApp.
       const ctx = {
         map: map, cfg: cfg, order: order,
-        items: readItems(lines),
+        items: readItems(lines, cfg),
         onHand: map.usesHoldBin ? readSerialsOnHand(lines) : {},
         holdBin: map.usesHoldBin ? holdBinFor(order, cfg) : ''
       };
@@ -538,8 +538,15 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         return refuse(code, 'NetSuite refused the save: ' + message);
       }
 
+      // ── THE DOCUMENT'S TOTAL SHORTFALL. One number, so a saved search
+      //    can find every document that came up short and a reconciliation
+      //    can compare it with what TrackTraceRX expected.
+      const exceptionQty = round6(lines.reduce(
+        (n, l) => n + (Number(l.__exceptionQty) || 0), 0));
+      const exceptionLines = lines.filter((l) => (Number(l.__exceptionQty) || 0) > 0);
+
       // ── STAMPED ONLY NOW, because only now is there a record.
-      stampCreated(map, newId, body, requestUuid);
+      stampCreated(map, newId, body, requestUuid, exceptionQty);
 
       const unit = unitFor(map, newId, '');
       logIo.recordInbound({
@@ -549,7 +556,20 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         endpoint: map.key + ' ' + body.operation, method: 'POST',
         httpStatus: 200, startedAt: startedAt,
         requestUuid: requestUuid, shipmentUuid: body.shipment_uuid,
-        request: body, lineTotal: lines.length, lineSent: applied.length
+        request: body, lineTotal: lines.length, lineSent: applied.length,
+        // A SHORT document is a success with something to answer for. The
+        // row stays closed - nothing failed - but it names the shortfall so
+        // the reconciliation page can find it without reopening the record.
+        suggested: exceptionQty > 0
+          ? 'SHORT BY ' + exceptionQty + ' across ' + exceptionLines.length +
+          ' line(s): ' + exceptionLines.map((l) => 'line ' +
+            l.line_unique_key + ' short ' + l.__exceptionQty +
+            ' (' + (l.exception_reason || 'no reason given') + ')').join('; ') +
+          '. The document is correct - this is what did not arrive. The ' +
+          'quantity is on each line as Exception Quantity and totalled on ' +
+          'the record, so it can be compared with what TrackTraceRX ' +
+          'expected without reading this row.'
+          : null
       });
 
       // §11.4 — the record exists and call 2 has not arrived. A legitimate
@@ -570,7 +590,15 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       const out = okEnvelope({
         internal_id: newId, external_id: requestUuid,
-        lines_posted: applied.length
+        lines_posted: applied.length,
+        exception_quantity: exceptionQty,
+        exception_lines: exceptionLines.map((l) => ({
+          line_unique_key: l.line_unique_key,
+          item_id: l.item_id,
+          exception_quantity: l.__exceptionQty,
+          exception_reason: l.exception_reason || '',
+          exception_note: l.exception_note || ''
+        }))
       });
       if (map.needsShipStatus) out.shipping_status = shipStatusLabel;
       return out;
@@ -638,6 +666,45 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           ' is left on the order. Over-receipt on a regulated product is a ' +
           'discrepancy to investigate, not a quantity to accept.');
 
+      // ══ THE EXCEPTION, AS A NUMBER ═══════════════════════════════════
+      //
+      // A short line is a SUCCESS - the operator scanned what arrived - but
+      // it is also a discrepancy somebody has to account for later, and
+      // "later" needs a number. `exception_reason` says why and
+      // `exception_note` says it in prose; neither can be totalled,
+      // filtered or compared against what TrackTraceRX expected.
+      //
+      // The payload may state it; otherwise it is what the order still
+      // wanted minus what was submitted. Stated and derived are compared,
+      // and a disagreement is the caller's arithmetic, not ours - so the
+      // DERIVED figure wins and the difference is audited.
+      const shortBy = (remaining > 0) ? round6(remaining - qty) : 0;
+      if (ln.exception_quantity !== undefined && ln.exception_quantity !== null
+        && Number(ln.exception_quantity) !== shortBy)
+        log.audit({
+          title: 'RB inbound exception_quantity disagrees with the order',
+          details: {
+            line: ln.line_unique_key, stated: Number(ln.exception_quantity),
+            derived: shortBy, remaining: remaining, submitted: qty,
+            rule: 'The DERIVED figure is written. The order is the authority ' +
+              'on what was outstanding.'
+          }
+        });
+      ln.__exceptionQty = shortBy;
+
+      // A shortfall on an ELIGIBLE line must be explained. On anything else
+      // it is ordinary short-shipping and the number alone is enough.
+      if (shortBy > 0 && info.eligible === true &&
+        !String(ln.exception_reason || '').trim())
+        throw err(C.LINE_ERR.EXCEPTION_REASON_REQUIRED,
+          'Line ' + ln.line_unique_key + ' submits ' + qty + ' of ' +
+          txn.named(info.name, itemId) + ' against ' + remaining +
+          ' outstanding, so ' + shortBy + ' is short, and no ' +
+          'exception_reason was given. A shortfall on a product ' +
+          'TrackTraceRX tracks is a discrepancy somebody has to account ' +
+          'for; an unexplained one cannot be reconciled afterwards. Send ' +
+          'one of the values from fulfilment_exceptions.');
+
       const detail = Array.isArray(ln.inventory) ? ln.inventory : [];
       const tracked = info.isLot || info.isSerial;
       if (tracked && !detail.length)
@@ -697,11 +764,47 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           throw err(C.LINE_ERR.BIN_INVALID_LOCATION,
             'Bin ' + txn.named(b.name, bin) + ' is not at the order\'s location.');
       }
-      if (!bin && ctx.map.usesHoldBin && ctx.cfg.useBins === true && info.useBins)
-        throw err(C.LINE_ERR.BIN_NOT_ALLOWED,
-          'No bin was named for line ' + ln.line_unique_key + ' (' +
-          txn.named(info.name, itemId) + '), and no on-hold bin is configured ' +
-          'on the location or the RapidBridge Configuration.');
+      // ══ A BIN IS MANDATORY ON AN ELIGIBLE LINE ═══════════════════════
+      //
+      // Not a preference. An eligible item is one TrackTraceRX tracks, and
+      // the whole hold-then-release flow is built on knowing which bin its
+      // stock is in: a receipt that lands it wherever NetSuite defaults
+      // leaves `inventory_release` with no bin to move it OUT of, and the
+      // goods sit unreleasable with nothing saying why.
+      //
+      // Both directions. A RECEIPT can fall back to the location's on-hold
+      // bin; a FULFILMENT cannot, because stock is being ISSUED and only
+      // the device knows which bin it was picked from. Either way, no bin
+      // on an eligible line stops the submission - and the refusal opens a
+      // review row rather than letting a half-tracked document exist.
+      if (!bin && ctx.cfg.useBins === true && info.eligible === true)
+        throw err(C.LINE_ERR.BIN_REQUIRED,
+          'No bin for line ' + ln.line_unique_key + ' (' +
+          txn.named(info.name, itemId) + '), which is eligible for ' +
+          'TrackTraceRX. ' + (ctx.map.usesHoldBin
+            ? 'Send `bin` on the line, or set an On-Hold Bin on location ' +
+            txn.named(ctx.order.locationName, ctx.order.locationId) +
+            ' or a Default Bin on the RapidBridge Configuration. Without ' +
+            'one the stock cannot be held, and inventory_release would ' +
+            'have no bin to move it out of.'
+            : 'Send `bin` on the line - the bin the stock was picked from. ' +
+            'A fulfilment has no default: only the device knows where it ' +
+            'came from.'));
+
+      // A NON-eligible line without a bin is left to NetSuite. It is not
+      // tracked, it is never held and it is never released, so there is
+      // nothing for this integration to lose track of.
+      if (!bin && ctx.map.usesHoldBin && ctx.cfg.useBins === true &&
+        info.useBins && info.eligible !== true)
+        log.audit({
+          title: 'RB inbound — no bin on a non-eligible line',
+          details: {
+            line: ln.line_unique_key, item: itemId,
+            effect: 'Left to NetSuite\'s own default. The line is not ' +
+              'tracked by TrackTraceRX, so it is never held and never ' +
+              'released.'
+          }
+        });
     };
 
     /** Put the validated line onto the document. Nothing here may throw. */
@@ -716,6 +819,10 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // that is what makes a partial a SUCCESS rather than a discrepancy.
       if (ln.exception_reason) setCurText(rec, C.LINE.excReason, ln.exception_reason);
       if (ln.exception_note) setCur(rec, C.LINE.excNote, ln.exception_note);
+      // ALWAYS written, zero included. A blank then means the line predates
+      // the field, not that nothing was short - which is the difference
+      // between a reconciliation that can be trusted and one that cannot.
+      setCur(rec, C.LINE.exceptionQty, Number(ln.__exceptionQty) || 0);
 
       const bin = binFor(ln, ctx);
       if (bin) setCur(rec, C.LINE.holdBin, bin);
@@ -1062,13 +1169,17 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       //    Blank in both places is a configuration error, not a default.
       const bins = releaseBins(body, order, locationId, cfg);
 
+      // ── THE ITEMS FIRST. Eligibility decides what the ledger is even
+      //    allowed to carry, so it has to be known before the seed.
+      const items = readItems(lines, cfg);
+
       // ── THE LEDGER. One lookupFields, and it is the authority.
       let ledger = readLedger(receiptId);
       if (!ledger.lotCount) {
         // First release against this receipt: seed the entitlements from what
         // the receipt actually received. ONE read, ONCE in the receipt's life
         // - every later release reads them back out of the stored JSON.
-        ledger = seedLedger(receiptId, ledger);
+        ledger = seedLedger(receiptId, ledger, cfg);
         if (!ledger.lotCount)
           return refuse(C.DOC_ERR.RECEIPT_NOT_READABLE,
             'Item Receipt ' + receiptId + ' carries no lot detail that could ' +
@@ -1100,7 +1211,6 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // ── THE REST OF THE PRE-READ. §17.4 rule 3: searches for the whole
       //    submission, not per line. Lots first, because the balance search
       //    needs the ids the names resolve to.
-      const items = readItems(lines);
       const lots = readLotsByName(lines, items);
       const balance = readHeldBalance(lines, locationId, bins);
 
@@ -1215,6 +1325,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         held_quantity: held,
         received_quantity: posted.received,
         fully_released: held === 0,
+        // Every transfer that has released against this receipt, in order.
+        // The same list the multiselect on the receipt now carries.
+        bin_transfers: posted.bts,
         lines_released: moves.map((m) => ({
           line_unique_key: m.lineKey,
           item_id: m.itemId,
@@ -1465,6 +1578,15 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       if (info.inactive)
         throw err(C.LINE_ERR.ITEM_INACTIVE,
           'Item ' + txn.named(info.name, itemId) + ' is inactive.');
+      // THERE IS NO RELEASE FOR AN ITEM TRACKTRACERX DOES NOT TRACK. It was
+      // never put in a hold bin, nothing is verifying it, and nothing is
+      // waiting on it.
+      if (info.eligible !== true)
+        throw err(C.LINE_ERR.NOT_ELIGIBLE,
+          'Item ' + txn.named(info.name, itemId) + ' on release line ' + key +
+          ' is not eligible for TrackTraceRX, so it was never held and ' +
+          'there is nothing to release. Take the line off the release; the ' +
+          'stock is already where the receipt put it.');
 
       const qty = Number(ln.quantity);
       if (!(qty > 0))
@@ -1734,6 +1856,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       updated: '',
       lots: {},
       calls: [],
+      bts: [],
       callCount: 0,
       lotCount: 0
     });
@@ -1789,6 +1912,16 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       out.updated = String(parsed.updated || '');
       out.lots = (parsed.lots && typeof parsed.lots === 'object') ? parsed.lots : {};
       out.calls = Array.isArray(parsed.calls) ? parsed.calls : [];
+      // EVERY Bin Transfer that has released against this receipt, kept
+      // separately from `calls` because `calls` is capped and this list is
+      // what the multiselect on the receipt is built from. Losing an id
+      // would unlink a transfer that really happened.
+      out.bts = Array.isArray(parsed.bts) ? parsed.bts.map(String) : [];
+      if (!out.bts.length)
+        out.calls.forEach((c) => {
+          const b = String((c && c.bt) || '');
+          if (b && out.bts.indexOf(b) === -1) out.bts.push(b);
+        });
       out.callCount = Number(parsed.callCount) || out.calls.length;
       out.lotCount = Object.keys(out.lots).length;
       return out;
@@ -1811,15 +1944,46 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * a row, keyed on the item alone, so a bin-only release has an
      * entitlement to measure against too.
      */
-    const seedLedger = (receiptId, ledger) => {
+    const seedLedger = (receiptId, ledger, cfg) => {
       if (ledger.corrupt) return ledger;
       const seeded = ledger;
       let got = seedFromSearch(receiptId, seeded);
       if (!got) got = seedFromLoad(receiptId, seeded);
+
+      // ══ NON-ELIGIBLE ITEMS ARE NOT PART OF A RELEASE ══════════════════
+      //
+      // An item TrackTraceRX does not track never goes to a hold bin, never
+      // waits for verification and has nothing to be released. Carrying it
+      // in the ledger would be worse than useless: `held_quantity` would
+      // count stock nobody is ever going to release, so a receipt would
+      // never read fully released and every release on it would sit on the
+      // worklist for good.
+      //
+      // The entitlements are dropped, and the receipt remembers how many
+      // were dropped so a reader is not left wondering where the lines
+      // went.
+      const ids = [];
+      Object.keys(seeded.lots).forEach((k) => {
+        const i = String(seeded.lots[k].item || '');
+        if (i && ids.indexOf(i) === -1) ids.push(i);
+      });
+      const info = itemInfo(ids, cfg, {});
+      let dropped = 0;
+      Object.keys(seeded.lots).forEach((k) => {
+        const i = String(seeded.lots[k].item || '');
+        if ((info[i] || {}).eligible !== true) { delete seeded.lots[k]; dropped++; }
+      });
+      seeded.skipped = dropped;
+
       seeded.lotCount = Object.keys(seeded.lots).length;
       log.audit({
         title: 'RB release ledger seeded for itemreceipt/' + receiptId,
-        details: { via: got || 'nothing', lots: seeded.lotCount }
+        details: {
+          via: got || 'nothing', eligibleLots: seeded.lotCount,
+          nonEligibleDropped: dropped,
+          rule: 'Only items eligible for TrackTraceRX can be released. The ' +
+            'rest were never held and have nothing to move.'
+        }
       });
       return seeded;
     };
@@ -2013,7 +2177,8 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         return {
           written: false, overRelease: false, movedNow: movedNow,
           released: ledgerReleased(ledger), held: ledgerHeld(ledger),
-          received: ledgerReceived(ledger), perLot: perLotReleased(ledger, moves)
+          received: ledgerReceived(ledger), bts: ledger.bts.slice(),
+          perLot: perLotReleased(ledger, moves)
         };
       }
 
@@ -2034,6 +2199,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       ledger.seq = (Number(ledger.seq) || 0) + 1;
       ledger.updated = new Date().toISOString();
       ledger.callCount = (Number(ledger.callCount) || 0) + 1;
+      if (ledger.bts.indexOf(String(btId)) === -1) ledger.bts.push(String(btId));
       ledger.calls.push({
         uuid: requestUuid, bt: String(btId), at: ledger.updated,
         moved: moves.map((m) => ({ k: m.key, q: m.quantity }))
@@ -2052,12 +2218,19 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       values[TXN.releaseLog] = JSON.stringify({
         v: C.RELEASE_LEDGER.VERSION, receipt: String(receiptId),
         seq: ledger.seq, updated: ledger.updated,
-        lots: ledger.lots, calls: ledger.calls, callCount: ledger.callCount
+        lots: ledger.lots, calls: ledger.calls, bts: ledger.bts,
+        callCount: ledger.callCount
       });
       values[TXN.releasedQty] = released;
       values[TXN.heldQty] = held;
       values[TXN.releasedAt] = new Date();
-      values[TXN.binTransfer] = String(btId);
+      // ── EVERY TRANSFER, NOT THE LAST ONE ─────────────────────────────
+      //    A MULTISELECT of transactions. A receipt released in three
+      //    batches has three Bin Transfers, and a field holding only the
+      //    most recent made the other two findable nowhere: the warehouse
+      //    question is "show me the transfers that released this receipt",
+      //    not "the last one".
+      values[TXN.binTransfer] = ledger.bts.slice();
       values[TXN.requestUuid] = requestUuid;
 
       let written = true;
@@ -2099,6 +2272,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             'again. Record the move on the receipt by hand before the ' +
             'next release.'),
         movedNow: movedNow, released: released, held: held, received: received,
+        bts: ledger.bts.slice(),
         perLot: perLotReleased(ledger, moves)
       };
     };
@@ -2182,33 +2356,66 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       return out;
     };
 
-    /** Lot, serial, bin and active for every item on the submission. ONE search. */
-    const readItems = (lines) => {
+    /**
+     * Lot, serial, bin, active AND ELIGIBILITY for every item on the
+     * submission. ONE search.
+     *
+     * Eligibility is read through the CONFIGURED field, the same way the
+     * outbound classification and the read RESTlet read it, so all three
+     * agree in an account that points Eligibility Field ID at its own item
+     * field. It is what decides whether a bin is mandatory on the line and
+     * whether the line can ever be released.
+     */
+    const readItems = (lines, cfg) => {
       const out = {};
       const ids = [];
       const seen = {};
-      lines.forEach((l) => {
+      (lines || []).forEach((l) => {
         const id = String(l.item_id || '');
         if (!id || seen[id]) return;
         seen[id] = true;
         ids.push(id);
       });
+      return itemInfo(ids, cfg, out);
+    };
+
+    const itemInfo = (ids, cfg, out) => {
+      out = out || {};
       if (!ids.length) return out;
+      const eligField = (cfg && cfg.eligField) || 'custitem_jj_rb_eligible';
+      const cols = ['itemid', 'isinactive', 'islotitem', 'isserialitem', 'usebins'];
+      const fill = (r, withElig) => {
+        out[String(r.id)] = {
+          name: r.getValue('itemid'),
+          inactive: util.truthy(r.getValue('isinactive')),
+          isLot: util.truthy(r.getValue('islotitem')),
+          isSerial: util.truthy(r.getValue('isserialitem')),
+          useBins: util.truthy(r.getValue('usebins')),
+          eligible: withElig
+            ? txn.eligibleValue(r.getText(eligField) || r.getValue(eligField))
+            : undefined
+        };
+      };
       try {
         search.create({
-          type: 'item',
-          filters: [['internalid', 'anyof', ids]],
-          columns: ['itemid', 'isinactive', 'islotitem', 'isserialitem', 'usebins']
-        }).run().each((r) => {
-          out[String(r.id)] = {
-            name: r.getValue('itemid'),
-            inactive: util.truthy(r.getValue('isinactive')),
-            isLot: util.truthy(r.getValue('islotitem')),
-            isSerial: util.truthy(r.getValue('isserialitem')),
-            useBins: util.truthy(r.getValue('usebins'))
-          };
-          return true;
+          type: 'item', filters: [['internalid', 'anyof', ids]],
+          columns: cols.concat([eligField])
+        }).run().each((r) => { fill(r, true); return true; });
+        return out;
+      } catch (e) {
+        // The configured field is not deployed on every item type in this
+        // account. Fall back WITHOUT it rather than failing the write, and
+        // say so: `eligible` is then undefined and the mandatory-bin and
+        // release gates treat the line as not eligible.
+        log.audit({
+          title: 'RB inbound — the Eligibility Field could not be read',
+          details: { field: eligField, error: (e && e.message) || String(e) }
         });
+      }
+      try {
+        search.create({
+          type: 'item', filters: [['internalid', 'anyof', ids]], columns: cols
+        }).run().each((r) => { fill(r, false); return true; });
       } catch (e) {
         log.error('Error @ inbound readItems', e);
       }
@@ -2324,13 +2531,16 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
     };
 
     /** The body fields, written once, after the record exists. */
-    const stampCreated = (map, id, body, requestUuid) => {
+    const stampCreated = (map, id, body, requestUuid, exceptionQty) => {
       const values = {};
       values[TXN.origin] = C.ORIGIN_MW;
       values[TXN.synced] = false;          // until call 2 — §11.4
       values[TXN.lastTry] = new Date();
       if (body.shipment_uuid) values[TXN.shipmentUuid] = body.shipment_uuid;
       if (requestUuid) values[TXN.requestUuid] = requestUuid;
+      // Always, zero included - a blank means the document predates the
+      // field, not that nothing was short.
+      values[TXN.exceptionQty] = Number(exceptionQty) || 0;
       try {
         record.submitFields({
           type: map.recordType, id: id, values: values,
