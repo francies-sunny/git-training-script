@@ -109,15 +109,15 @@ Two lots of item 718 become **one** `inventory` sublist line with **two** invent
 | `item_receipt_internal_id` | **yes*** | Carries the release ledger. **The release is refused without a receipt** |
 | `shipment_uuid` | **yes*** | Used to find the receipt when its internal id is not sent |
 | `location_id` | no | A Bin Transfer **cannot cross locations**. Taken from the order or the receipt when absent |
-| `from_bin` | no | The on-hold bin, by **internal id**. Payload → Location's on-hold bin → config default bin |
-| `to_bin` | no | The good bin, by **internal id**. Payload → Location's good bin. **Blank in both is a configuration error, not a default** |
+| `from_bin` · `hold_bin` | no | The on-hold bin, by **internal id**. Payload → the **Location's On-Hold Bin** → the config Default Bin. Usually left out: the receipt already put the stock there and the location knows where |
+| **`good_bin`** | no | **The destination, and the decision this call exists to carry.** Payload → the **Location's Good Bin**. `to_bin` is accepted as the older spelling. **No fallback to the config Default Bin** — that is the RECEIVING default, and releasing into it would put verified stock back where it came from |
 | `transaction_date` | no | `YYYY-MM-DD` or `DD/MM/YYYY`. Today otherwise |
 | `memo` | no | Defaults to `RapidBridge inventory release <request_uuid>` |
 | `lines[].line_unique_key` | no | Echoed back on success and on failure, so the Middleware can point at the right line |
 | `lines[].item_id` | **yes** | Internal id |
 | `lines[].lot` | **yes** for a lot/serial item | **The NAME**, as TrackTrace prints it. Also accepted as `lot_number` or `lot_name`. Matched case-insensitively and trimmed, against that item's **on-hand** inventory numbers only |
 | `lines[].quantity` | **yes** | Must be > 0 and must not exceed what the from-bin actually holds |
-| `lines[].from_bin` · `to_bin` | no | Per-line override of the header bins |
+| `lines[].good_bin` · `from_bin` | no | Per-line override of the header bins. `to_bin` / `hold_bin` accepted as the older spellings |
 
 \* **one of the two is required.** The ledger lives on the receipt, and without it there is no
 guard against a second call moving stock the first already moved.
@@ -213,7 +213,7 @@ the on-hold bin, which is the safe place for it.
 | `QTY_EXCEEDS_RECEIVED` | Names received, already released, and what is still releasable |
 | `LOT_NOT_IN_BIN` | The ledger says it is unreleased but the bin does not hold it. Somebody moved it by hand. Refused, never redirected |
 | `QTY_EXCEEDS_IN_BIN` | Some is physically there, not all |
-| `BIN_NOT_CONFIGURED` | No from-bin or no to-bin in the payload **or** in configuration; or both bins the same |
+| `BIN_NOT_CONFIGURED` | No source bin, or no `good_bin` in the payload **and** no Good Bin on the location; or both bins the same |
 | `BAD_QUANTITY` · `ITEM_NOT_FOUND` · `ITEM_INACTIVE` · `LOT_INVALID` | As on a receipt |
 
 The first four come from the **ledger** and the next two from `inventorybalance`. When the balance

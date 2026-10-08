@@ -417,6 +417,7 @@ governance, deployment, role audience and logging.
   "request_uuid": "11111111-2222-3333-4444-555555555555",
   "order_id": "16050",
   "shipment_uuid": "",
+  "hold_bin": "77",
   "transaction_date": "2026-09-30",
   "memo": "Postman test receipt for PO447",
   "lines": [
@@ -436,8 +437,8 @@ governance, deployment, role audience and logging.
       "item_id": "719",
       "quantity": 4,
       "inventory": [
-        { "lot": "LOT-719-A", "expiry": "2027-06-30", "quantity": 3 },
-        { "lot": "LOT-719-B", "expiry": "2028-01-31", "quantity": 1 }
+        { "lot": "LOT-719-A", "expiry": "2027-06-30", "quantity": 3, "bin": "936" },
+        { "lot": "LOT-719-B", "expiry": "2028-01-31", "quantity": 1, "bin": "937" }
       ]
     }
   ]
@@ -450,8 +451,12 @@ governance, deployment, role audience and logging.
 | `request_uuid` | **Mandatory.** Becomes the record's native `externalId`, and is the only duplicate guard |
 | `order_id` | The NetSuite PO or SO internal id |
 | `line_unique_key` | The value `fetch_transaction` returned under that name — the transformed document's `orderline`. Echo it back unchanged |
-| `bin` | Optional. A receipt defaults to the location's on-hold bin; a fulfilment defaults none |
-| `exception_reason` | Set **by text**, so it must be a name from `fulfilment_exceptions` |
+| `bin` | **THE BIN BELONGS WITH THE LOT.** Read as close to it as the payload puts it: `inventory[].bin` → line `bin` → body `bin`/`hold_bin` → the default. One line can carry two lots in two bins, and they stay in two bins |
+| | For an **eligible** item there is NO default: no bin on the payload is `BIN_REQUIRED`, naming the lot or serial. `fetch_transaction` returns `default_hold_bin` for the device to send back — sending it back is providing it |
+| | For a **non-eligible** item a receipt still falls back to the location's On-Hold Bin, then the config Default Bin. A fulfilment never defaults |
+| | The line's Hold Bin column is filled only when the whole line used **one** bin. Mixed lots leave it blank rather than naming one of several |
+| `exception_reason` | Set **by text**, so it must be a name from `fulfilment_exceptions`. A short line is NOT automatically an exception — a partial receipt leaves the rest on the order. This field is the declaration that the rest is not coming |
+| `exception_quantity` | Optional, and only with a reason. Defaults to the shortfall; may be less when part of the remainder is genuinely still on order. Larger than the shortfall is refused |
 | `inventory` | One row per lot; for a **serialized** item one row per serial, `{ "serial": "SN1" }`, quantity 1 each |
 
 Line rules: `inventory` totals must equal `quantity`; a lot- or serial-tracked item with no
@@ -532,8 +537,7 @@ bin. Never an Inventory Status Change — Design v3.1 §9.2.1.
   "item_receipt_internal_id": "2481003",
   "shipment_uuid": "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
   "location_id": "13",
-  "from_bin": "77",
-  "to_bin": "88",
+  "good_bin": "88",
   "transaction_date": "2026-10-05",
   "memo": "EPCIS verification passed - PO447",
   "lines": [
@@ -548,7 +552,8 @@ bin. Never an Inventory Status Change — Design v3.1 §9.2.1.
 | `request_uuid` | **Mandatory.** Becomes the Bin Transfer's native `externalid`. A repeat is answered with the transfer that already exists, as a success — **no second transfer** |
 | `item_receipt_internal_id` · `shipment_uuid` | **One of them is required.** The receipt carries the RELEASE LEDGER (`custbody_jj_rb_release_log`) — received and released per lot — and that is what stops a retry moving the same stock twice. `RECEIPT_NOT_IDENTIFIED` without it |
 | `location_id` | A Bin Transfer **cannot cross locations**. Taken from the order or the receipt when absent |
-| `from_bin` · `to_bin` | Internal ids. Payload → the **Location's** on-hold / good bin → the config default bin. **Blank in both places is a configuration error, not a default** |
+| `from_bin` · `hold_bin` | The source. Payload → the Location's **On-Hold Bin** → the config Default Bin. Usually omitted — the receipt put the stock there and the location knows where |
+| **`good_bin`** | The destination, and the decision this call carries. Payload → the Location's **Good Bin**. `to_bin` is the older spelling. **No fallback to the config Default Bin**: that is the RECEIVING default |
 | `lines[].lot` | **The NAME**, as TrackTrace prints it. Resolved against that item's **on-hand** inventory numbers, matched trimmed and case-insensitively. Also accepted as `lot_number` / `lot_name` |
 | `lines[].quantity` | Must not exceed what the from-bin actually holds |
 
@@ -769,9 +774,9 @@ Addressable by `internal_id`, `transaction_uuid` or `document_number`.
 | `unit_id` · `unit_as_entered` | The id the line carries, and the raw value before resolution. `unit_as_entered` is the clue when resolution fails |
 | `conversion_rate` · `quantity_in_base_units` | The base unit is always Each, so a line in Pallets says how many Each that is |
 | `uom_unit_matched` | The UOM Detail row's Saleable Unit. **One candidate, no ladder** — empty means the resolved name has no row |
-| `requires_serialization` | Read from the **item**, through the configured Eligibility Field — never from the line column |
+| `requires_serialization` | Read from the **item**, through the configured Eligibility Field — never from the line column. **An eligible line must carry a bin on the submitted payload** — the location default is offered, not applied |
 | `product_uuid_missing_reason` | **Only ever set on an eligible line.** A non-eligible item is never sent to TrackTraceRX, so it has no product UUID by design and this field stays empty — nothing is wrong and nothing wants fixing |
-| `default_hold_bin` | The location's on-hold bin, falling back to the config default. Receipts only |
+| `default_hold_bin` | The location's on-hold bin, falling back to the config default. Receipts only. **It is offered for the device to send back, not applied automatically**: where tracked stock physically went is observed, not assumed, so an eligible line with no bin on the payload is refused with `BIN_REQUIRED` |
 | `lines_not_scannable` | **Eligible** lines with no `product_uuid`. Submitting one is the failure the operator cannot undo. Each entry carries `unit`, `unit_id`, `code` (`UNIT_UNKNOWN` · `NO_ROW` · `NO_UUID`) and the prose `reason` |
 
 #### When a line cannot be scanned

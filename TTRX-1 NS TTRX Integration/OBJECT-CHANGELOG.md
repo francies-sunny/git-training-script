@@ -2263,3 +2263,190 @@ platform does. A regression now fails the suite instead of the account.
 goes through `submitFields`, that an undeployed field does not lose its neighbours, and both sides
 of the `inactive` reading. `t9` (203) asserts the bin spelling on both read searches and that
 `available` is actually read, not defaulted.
+
+---
+
+## Pass 28 — one bin per document, and a partial receipt is not an exception
+
+`jj_rb_core.js` · `jj_rl_rb_write.js` · `t8.js` · `t13.js` · `t14.js` · `syharness.js`.
+
+### 1. Each document wants ONE bin, and they are different bins
+
+| | Wants | Ladder |
+|---|---|---|
+| **`item_receipt`** | The **hold** bin. Nothing on a receipt ever goes straight to a good bin | line `hold_bin`/`bin` → body `hold_bin`/`bin` → the **Location's On-Hold Bin** → the config **Default Bin** |
+| **`item_fulfillment`** | The **pick** bin. No default at all — stock is being ISSUED and only the device knows which bin it came out of | line `bin` only |
+| **`inventory_release`** | The **good** bin. The source is already known | **`good_bin`** → the Location's **Good Bin** |
+
+The receipt gained a **body-level** `hold_bin`: one receipt into one hold bin is the normal shape,
+and repeating it on every line was noise.
+
+**The release's `good_bin` deliberately does NOT fall back to the config Default Bin.** That field is
+the *receiving* default — the bin a receipt lands in. Releasing into it would move verified stock
+back where it came from and mark the job done. Blank in the payload and on the location is a
+configuration error, and the message now says exactly that.
+
+Its `from_bin` does fall back to the Default Bin, because that is the same ladder the receipt used
+to choose where to put the stock. The two must agree, or the release looks in a bin the receipt
+never used.
+
+Older spellings still accepted: `bin` / `bin_id` on a receipt line, `to_bin` on a release.
+
+### 2. A PARTIAL RECEIPT IS NOT AN EXCEPTION
+
+Pass 25 made an `exception_reason` **mandatory** on any short eligible line. That was wrong, and it
+would have refused the most ordinary receipt there is:
+
+> A purchase order for 100 that receives 24 today is not short by 76. It has **76 still on order**,
+> arriving next week, and the line stays open to receive them.
+
+The same on a fulfilment: shipping 1 of 2 now and 1 on Friday is a partial fulfilment, not a pick
+that failed.
+
+**An exception is something the DEVICE DECLARES** — the operator saw a reason the rest is *not*
+coming: damaged in transit, short against the ASN, stock missing from the bin.
+
+| Payload | Result |
+|---|---|
+| reason, no quantity | The shortfall is the exception quantity |
+| reason **and** quantity | The declared quantity — which may be **less** than the shortfall, when part of the remainder is genuinely still on order |
+| quantity, **no reason** | **Refused** — `EXCEPTION_REASON_REQUIRED`. A number nobody can explain afterwards is worse than no number |
+| quantity **>** shortfall | **Refused** — `BAD_QUANTITY`, naming both figures |
+| neither | **No exception.** `0` is written and the remainder stays on the order |
+
+A reason on a line that is not short is recorded with a quantity of `0` and audited — the
+declaration is kept, the arithmetic stays honest.
+
+### 3. Location address sync is ON
+
+`C.MASTER.location.hasChildren: null` → **`'mainaddress'`**.
+
+That one value was the whole switch, exactly as the comment beside it promised. Nothing else moved:
+
+| | |
+|---|---|
+| `readAddresses` | Already routes a LOCATION to `locationAddresses`, which reads the **`mainaddress` body subrecord** — a location has one address, not an `addressbook` sublist |
+| The write-back | Already reads `line === null` as "the main address subrecord" |
+| `POST /locations/{uuid}/addresses` | Declared since the first build |
+| `refreshPartnerDefaults` | Returns immediately for anything that is not a Customer or Vendor — a location has no default billing or shipping address |
+
+**The address is still NOT in `buildLocation`'s comparison**, and that is deliberate: an address is
+its own object in the Middleware with its own identifier, payload and work item, so an address edit
+must not re-send the Location. `t14` asserts it — the street appears in the address call's body and
+nowhere in the location's payload.
+
+848 assertions across 14 suites. `t8` (96) covers the receipt's four-step hold-bin ladder, the body
+override, and that a body `hold_bin` does **not** supply a fulfilment's pick bin. `t13` (165) covers
+`good_bin`, the line override, the older spelling and the refusal that names the Default Bin as the
+receiving default. `t14` (80) covers the location address call, its ordering after the location, the
+`useAddress` gate and the comparison separation.
+
+---
+
+## Pass 29 — the bin belongs with the lot, and an eligible item is never guessed
+
+`jj_rl_rb_write.js` · `t8.js`.
+
+### 1. One bin per INVENTORY ROW, not per line
+
+One line of a receipt can carry several lots, and a warehouse puts them wherever there is space:
+`LOT-A` in `HOLD-01` and `LOT-B` in `HOLD-02` is an ordinary afternoon, not an edge case. A single
+bin per line forced them into one, and the stock then sat somewhere the record did not say — which
+`inventory_release` would later refuse, correctly, as `LOT_NOT_IN_BIN`.
+
+The bin is now read as close to the lot as the payload puts it:
+
+```
+inventory[].bin  →  line bin  →  body bin  →  the default
+```
+
+Each inventory assignment gets its **own** `binnumber`. Validation is per row too — existence and
+location are checked for every bin on the line, and the refusal names the lot or the serial, not
+just the line:
+
+```
+No bin for lot "L200" on line 1 (Amoxicillin 500mg (715)), which is eligible for TrackTraceRX…
+Bin 999, named for serial SN2 on line 2, is not at the order's location.
+```
+
+**The line's Hold Bin column is filled only when the whole line used one bin.** Two lots in two
+bins leave it blank: naming one of several would imply the rest, and the bins are already recorded
+where they belong — on the inventory detail.
+
+`validateLine` resolves the bins and hands them to `applyLine` on the line object. Neither
+re-derives them: a validator and an applier that compute the same thing twice are a validator and
+an applier that will one day disagree.
+
+### 2. An eligible item gets NO default bin
+
+Pass 28 let a receipt fall back to the location's On-Hold Bin for **every** line. For a tracked
+item that is a guess, and the wrong guess is expensive:
+
+> Where a lot physically landed is a **fact the operator observed**. Infer it and the release looks
+> in the wrong bin, with the goods on the dock and nothing saying why.
+
+So for an item the account marks eligible, the bin must come **from the payload** — row, line or
+body. The location's On-Hold Bin and the config Default Bin no longer satisfy it.
+
+**`fetch_transaction` already returns `default_hold_bin` for exactly this.** It is *offered* so the
+device can send it back; sending it back is providing it, leaving the field out is not. The refusal
+says so, and names the bin the device could have used.
+
+A **non-eligible** item still defaults — nothing tracks it, nothing holds it, nothing releases it.
+A **fulfilment** still has no default at all, for either kind: stock is being issued and only the
+device knows which bin it came out of.
+
+### Payload
+
+| Where | |
+|---|---|
+| `inventory[].bin` | **Preferred.** The bin this lot or serial went to |
+| line `bin` / `hold_bin` | Shorthand for "all of this line's rows" |
+| body `bin` / `hold_bin` | Shorthand for "all of this submission" |
+
+`bin_id` and `hold_bin_id` are accepted for each.
+
+866 assertions across 14 suites. `t8` (114) covers the four-step ladder on a non-eligible line, the
+eligible refusal with the location bin present, two lots in two bins, two serials in two bins, the
+blank line column on a mixed line, a per-row wrong-location bin, and a fulfilment row bin beating
+the body.
+
+---
+
+## Pass 30 — the two developer documents, regenerated from the scripts as they stand
+
+No script changed. Two Word documents were rebuilt from the current behaviour of the code, not from
+the previous documents — the old text had drifted past bins, the release ledger, the feature gates
+and the review-vs-audit split in the Sync Log.
+
+### `TTRX-1 NS to TT Integration DD v4.0.docx` — outbound, 20 pages
+
+Supersedes v3.0, which covered master data only. v4.0 covers **everything NetSuite sends TO the
+Middleware**:
+
+- The shared engine once — trigger, config and feature gate, preflight, canonical payload, change
+  detection, operation choice, Sync Log model, the API call and its safety rails, success, failure,
+  `util.writeFields` and the bin exception, inactivation and deletion, forced re-sync.
+- An endpoint and identity reference table, then per-record behaviour: Dosage Form, Location,
+  Location Address, Customer/Vendor, Address, Item and UOM Detail, Bin.
+- Transaction synchronization: the **crossing test**, `sync` vs `scannable`, line eligibility,
+  dependency pre-sync, unit resolution, the payload, the quantity convention, close/cancel/void.
+- **How to Test, split per sync type** — sections A–H, each self-contained.
+
+### `TTRX-1 TT to NS Integration DD v1.0.docx` — inbound, 29 pages
+
+New document. Everything the **Middleware asks of NetSuite**:
+
+- The two RESTlets, the envelope, OAuth 2.0 M2M (JWT client assertion, no client secret), dispatch,
+  **GET and POST are the same contract**, paging, and the inbound Sync Log policy — *a clean read
+  writes nothing*.
+- The seven read operations, each with a GET parameter table, a sample GET and a sample response:
+  `list_transactions`, `fetch_transaction`, `lookup_item`, `lookup_lot`, `lookup_location`,
+  `lookup_bin`, `fetch_inventory`. Read error codes and the `notes` table.
+- The four write operations: `item_receipt`, `item_fulfillment`, `identifier`, `inventory_release`,
+  with the bin rules (the bin belongs with the lot; an eligible item is never guessed), the
+  exception rules, the **release ledger** and its JSON shape, and the document and line error tables.
+- **How to Test, sections A–I**, plus the open questions.
+
+Both built on the v3.0 template — same cover, styles, numbering and footer — and verified by
+rendering to PDF and reading every page.

@@ -997,17 +997,23 @@ define(['N/search', 'N/record'],
       location: {
         key: 'LOCATION', syncType: SYNCTYPE.LOCATION, builder: 'location', implemented: true,
         featureFlag: null,
-        // ── Location ADDRESS sync is OFF. ──────────────────────────────────
-        // This one value is the whole switch. While it is null the engine
-        // pushes no address child calls for a Location, and buildLocation
-        // leaves the address set out of the comparison, so an address-only
-        // edit does not re-send the Location either.
+        // ── Location ADDRESS sync is ON. ───────────────────────────────────
         //
-        // To switch it back on: set this to 'addressbook'. Nothing else needs
-        // to change — the child endpoint below and the address builder, the
-        // change detection and the write-back all stay in place and are still
-        // used by Customer and Vendor, which are unaffected.
-        hasChildren: null,
+        // `mainaddress`, not `addressbook`. A Location has ONE address, held
+        // in a body SUBRECORD; a Customer or a Vendor has a sublist of them.
+        // The engine already tells the two apart - `readAddresses` routes a
+        // LOCATION to `locationAddresses`, and the write-back reads
+        // `line === null` as "the main address subrecord". This value is the
+        // switch and nothing else had to change.
+        //
+        // STILL NOT IN buildLocation's COMPARISON. An address is its own
+        // object in the Middleware, with its own identifier, payload and work
+        // item, so an address edit is an ADDRESS change and must not re-send
+        // the Location. It is evaluated separately on every save.
+        //
+        // Master Data Design v1.1 §9.5 wants it: a location without an
+        // address is a location TrackTraceRX cannot place.
+        hasChildren: 'mainaddress',
         logSubjectField: LOG.location,
         parentField: 'parent',                     // NetSuite's own location hierarchy
         fields: {

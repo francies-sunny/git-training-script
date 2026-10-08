@@ -469,6 +469,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         map: map, cfg: cfg, order: order,
         items: readItems(lines, cfg),
         onHand: map.usesHoldBin ? readSerialsOnHand(lines) : {},
+        // The body's own bin — payload, and the last payload-level answer
+        // before the default.
+        bodyBin: payloadBin(body),
         holdBin: map.usesHoldBin ? holdBinFor(order, cfg) : ''
       };
 
@@ -666,44 +669,76 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           ' is left on the order. Over-receipt on a regulated product is a ' +
           'discrepancy to investigate, not a quantity to accept.');
 
-      // ══ THE EXCEPTION, AS A NUMBER ═══════════════════════════════════
+      // ══ THE EXCEPTION, AND WHAT IT IS NOT ════════════════════════════
       //
-      // A short line is a SUCCESS - the operator scanned what arrived - but
-      // it is also a discrepancy somebody has to account for later, and
-      // "later" needs a number. `exception_reason` says why and
-      // `exception_note` says it in prose; neither can be totalled,
-      // filtered or compared against what TrackTraceRX expected.
+      // ── A PARTIAL RECEIPT IS NOT AN EXCEPTION ──────────────────────────
       //
-      // The payload may state it; otherwise it is what the order still
-      // wanted minus what was submitted. Stated and derived are compared,
-      // and a disagreement is the caller's arithmetic, not ours - so the
-      // DERIVED figure wins and the difference is audited.
+      // This is the correction. A purchase order for 100 that receives 24
+      // today is not short by 76 - it has 76 still on order, arriving next
+      // week, and the order line stays open to receive them. Treating every
+      // under-receipt as a discrepancy would have refused the most ordinary
+      // receipt there is, and put a work item on every one it let through.
+      //
+      // The same holds on a fulfilment: shipping 1 of 2 now and 1 on Friday
+      // is a partial fulfilment, not a pick that failed.
+      //
+      // ── AN EXCEPTION IS SOMETHING THE DEVICE DECLARES ──────────────────
+      //
+      // `exception_reason` is the declaration. The operator saw a reason the
+      // rest is NOT coming - damaged in transit, short against the ASN,
+      // stock missing from the bin - and said so. Only then is there a
+      // discrepancy to carry, and only then is there a quantity to carry it
+      // with.
+      //
+      //   reason, no quantity   -> the shortfall is the quantity
+      //   reason and quantity   -> the declared quantity, which may be less
+      //                            than the shortfall when part of the
+      //                            remainder is genuinely still on order
+      //   quantity, no reason   -> REFUSED. A number nobody will be able to
+      //                            explain is worse than no number
+      //   neither               -> no exception. 0 is written, and the
+      //                            remainder stays on the order
       const shortBy = (remaining > 0) ? round6(remaining - qty) : 0;
-      if (ln.exception_quantity !== undefined && ln.exception_quantity !== null
-        && Number(ln.exception_quantity) !== shortBy)
+      const hasReason = !!String(ln.exception_reason || '').trim();
+      const stated = (ln.exception_quantity === undefined ||
+        ln.exception_quantity === null || ln.exception_quantity === '')
+        ? null : Number(ln.exception_quantity);
+
+      if (stated !== null && !(stated >= 0))
+        throw err(C.LINE_ERR.BAD_QUANTITY,
+          'Line ' + ln.line_unique_key + ' has exception_quantity "' +
+          ln.exception_quantity + '".');
+
+      if (stated !== null && !hasReason)
+        throw err(C.LINE_ERR.EXCEPTION_REASON_REQUIRED,
+          'Line ' + ln.line_unique_key + ' declares an exception quantity of ' +
+          stated + ' for ' + txn.named(info.name, itemId) + ' and gives no ' +
+          'exception_reason. A quantity nobody can explain afterwards is ' +
+          'worse than no quantity at all. Send one of the values from ' +
+          'fulfilment_exceptions.');
+
+      // An exception cannot exceed what was outstanding. More than that is
+      // arithmetic nobody can reconcile, not a bigger problem.
+      if (stated !== null && remaining > 0 && stated > shortBy)
+        throw err(C.LINE_ERR.BAD_QUANTITY,
+          'Line ' + ln.line_unique_key + ' declares an exception of ' + stated +
+          ' but only ' + shortBy + ' of ' + txn.named(info.name, itemId) +
+          ' went unreceived (' + remaining + ' outstanding, ' + qty +
+          ' submitted). An exception cannot be larger than the shortfall.');
+
+      if (hasReason && shortBy === 0 && stated === null)
         log.audit({
-          title: 'RB inbound exception_quantity disagrees with the order',
+          title: 'RB inbound exception_reason on a line that is not short',
           details: {
-            line: ln.line_unique_key, stated: Number(ln.exception_quantity),
-            derived: shortBy, remaining: remaining, submitted: qty,
-            rule: 'The DERIVED figure is written. The order is the authority ' +
-              'on what was outstanding.'
+            line: ln.line_unique_key, remaining: remaining, submitted: qty,
+            effect: 'The reason is recorded on the line; the exception ' +
+              'quantity is 0, because nothing went unreceived.'
           }
         });
-      ln.__exceptionQty = shortBy;
 
-      // A shortfall on an ELIGIBLE line must be explained. On anything else
-      // it is ordinary short-shipping and the number alone is enough.
-      if (shortBy > 0 && info.eligible === true &&
-        !String(ln.exception_reason || '').trim())
-        throw err(C.LINE_ERR.EXCEPTION_REASON_REQUIRED,
-          'Line ' + ln.line_unique_key + ' submits ' + qty + ' of ' +
-          txn.named(info.name, itemId) + ' against ' + remaining +
-          ' outstanding, so ' + shortBy + ' is short, and no ' +
-          'exception_reason was given. A shortfall on a product ' +
-          'TrackTraceRX tracks is a discrepancy somebody has to account ' +
-          'for; an unexplained one cannot be reconciled afterwards. Send ' +
-          'one of the values from fulfilment_exceptions.');
+      ln.__exceptionQty = hasReason
+        ? (stated === null ? shortBy : stated)
+        : 0;
 
       const detail = Array.isArray(ln.inventory) ? ln.inventory : [];
       const tracked = info.isLot || info.isSerial;
@@ -749,55 +784,96 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           'Line ' + ln.line_unique_key + ' submits quantity ' + qty +
           ' but its inventory detail adds up to ' + total + '.');
 
-      // §11.8 — the Middleware resolved the bin against the allowed-bins
-      // service before submitting, so by the time this runs a named bin is a
-      // value to validate, not a decision to make.
-      const bin = binFor(ln, ctx);
-      if (bin && ctx.cfg.useBins === true) {
-        const b = binInfo(bin, ctx);
-        if (!b.exists)
-          throw err(C.LINE_ERR.BIN_NOT_ALLOWED,
-            'Bin ' + bin + ' named on line ' + ln.line_unique_key +
-            ' does not exist.');
-        if (b.location && ctx.order.locationId
-          && String(b.location) !== String(ctx.order.locationId))
-          throw err(C.LINE_ERR.BIN_INVALID_LOCATION,
-            'Bin ' + txn.named(b.name, bin) + ' is not at the order\'s location.');
-      }
-      // ══ A BIN IS MANDATORY ON AN ELIGIBLE LINE ═══════════════════════
+      // ══ THE BINS, ONE PER INVENTORY ROW ══════════════════════════════
       //
-      // Not a preference. An eligible item is one TrackTraceRX tracks, and
-      // the whole hold-then-release flow is built on knowing which bin its
-      // stock is in: a receipt that lands it wherever NetSuite defaults
-      // leaves `inventory_release` with no bin to move it OUT of, and the
-      // goods sit unreleasable with nothing saying why.
+      // §11.8. The Middleware resolved each bin against the allowed-bins
+      // service before submitting, so by the time this runs a named bin is
+      // a value to VALIDATE, not a decision to make.
       //
-      // Both directions. A RECEIPT can fall back to the location's on-hold
-      // bin; a FULFILMENT cannot, because stock is being ISSUED and only
-      // the device knows which bin it was picked from. Either way, no bin
-      // on an eligible line stops the submission - and the refusal opens a
-      // review row rather than letting a half-tracked document exist.
-      if (!bin && ctx.cfg.useBins === true && info.eligible === true)
-        throw err(C.LINE_ERR.BIN_REQUIRED,
-          'No bin for line ' + ln.line_unique_key + ' (' +
-          txn.named(info.name, itemId) + '), which is eligible for ' +
-          'TrackTraceRX. ' + (ctx.map.usesHoldBin
-            ? 'Send `bin` on the line, or set an On-Hold Bin on location ' +
-            txn.named(ctx.order.locationName, ctx.order.locationId) +
-            ' or a Default Bin on the RapidBridge Configuration. Without ' +
-            'one the stock cannot be held, and inventory_release would ' +
-            'have no bin to move it out of.'
-            : 'Send `bin` on the line - the bin the stock was picked from. ' +
-            'A fulfilment has no default: only the device knows where it ' +
-            'came from.'));
+      // One per row, because one line can carry several lots and a
+      // warehouse puts them where there is space. The resolved bins are
+      // kept on the line for applyLine, which must not re-derive them: a
+      // validator and an applier that compute the same thing twice are a
+      // validator and an applier that will one day disagree.
+      const rows = detail.length ? detail : [null];
+      const bins = rows.map((d) => binForRow(ln, d, ctx, info));
+      ln.__rowBins = detail.length ? bins : [];
 
-      // A NON-eligible line without a bin is left to NetSuite. It is not
+      const rowName = (d) => (d
+        ? (d.serial ? 'serial ' + d.serial
+          : (d.lot ? 'lot "' + d.lot + '"' : 'the row'))
+        : 'the line');
+
+      for (let i = 0; i < rows.length; i++) {
+        const bin = bins[i];
+
+        // ══ AN ELIGIBLE ITEM MUST BE TOLD WHERE ITS STOCK WENT ══════════
+        //
+        // Not a preference, and NOT satisfiable by a configuration record.
+        // Where a tracked lot physically landed is a fact the operator
+        // observed; infer it and `inventory_release` looks in the wrong bin
+        // with the goods on the dock and nothing saying why.
+        //
+        // `fetch_transaction` returns `default_hold_bin` so the device can
+        // send it back. Sending it back IS providing it; leaving the field
+        // out is not.
+        if (!bin && ctx.cfg.useBins === true && info.eligible === true)
+          throw err(C.LINE_ERR.BIN_REQUIRED,
+            'No bin for ' + rowName(rows[i]) + ' on line ' +
+            ln.line_unique_key + ' (' + txn.named(info.name, itemId) +
+            '), which is eligible for TrackTraceRX. ' + (ctx.map.usesHoldBin
+              ? 'Send `bin` on the inventory row - different lots may go to ' +
+              'different bins - or on the line, or on the body. ' +
+              'fetch_transaction returns default_hold_bin (' +
+              (ctx.holdBin || 'none configured on location ' +
+                txn.named(ctx.order.locationName, ctx.order.locationId)) +
+              ') for the device to send back. It is NOT applied ' +
+              'automatically: where tracked stock went is observed, not ' +
+              'assumed, and a wrong bin here is a release that cannot ' +
+              'find its goods.'
+              : 'Send `bin` on the inventory row or the line - the bin the ' +
+              'stock was picked from. A fulfilment has no default: only ' +
+              'the device knows where it came from.'));
+
+        if (bin && ctx.cfg.useBins === true) {
+          const b = binInfo(bin, ctx);
+          if (!b.exists)
+            throw err(C.LINE_ERR.BIN_NOT_ALLOWED,
+              'Bin ' + bin + ' named for ' + rowName(rows[i]) + ' on line ' +
+              ln.line_unique_key + ' does not exist.');
+          if (b.location && ctx.order.locationId
+            && String(b.location) !== String(ctx.order.locationId))
+            throw err(C.LINE_ERR.BIN_INVALID_LOCATION,
+              'Bin ' + txn.named(b.name, bin) + ', named for ' +
+              rowName(rows[i]) + ' on line ' + ln.line_unique_key +
+              ', is not at the order\'s location.');
+        }
+      }
+
+      // The LINE column holds one bin, so it holds one only when the whole
+      // line used one. Mixed lots keep their bins where they belong - on
+      // the inventory detail - and the column stays blank rather than
+      // naming one of them and implying the rest.
+      const distinct = bins.filter((b, i) => b && bins.indexOf(b) === i);
+      ln.__lineBin = distinct.length === 1 ? distinct[0] : '';
+      if (distinct.length > 1)
+        log.audit({
+          title: 'RB inbound - one line, several bins',
+          details: {
+            line: ln.line_unique_key, item: itemId, bins: distinct,
+            effect: 'Each inventory row carries its own bin. The line\'s ' +
+              'Hold Bin column is left blank: naming one of several would ' +
+              'imply the rest.'
+          }
+        });
+
+      // A NON-eligible line with no bin is left to NetSuite. It is not
       // tracked, it is never held and it is never released, so there is
       // nothing for this integration to lose track of.
-      if (!bin && ctx.map.usesHoldBin && ctx.cfg.useBins === true &&
+      if (!distinct.length && ctx.map.usesHoldBin && ctx.cfg.useBins === true &&
         info.useBins && info.eligible !== true)
         log.audit({
-          title: 'RB inbound — no bin on a non-eligible line',
+          title: 'RB inbound - no bin on a non-eligible line',
           details: {
             line: ln.line_unique_key, item: itemId,
             effect: 'Left to NetSuite\'s own default. The line is not ' +
@@ -824,11 +900,14 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // between a reconciliation that can be trusted and one that cannot.
       setCur(rec, C.LINE.exceptionQty, Number(ln.__exceptionQty) || 0);
 
-      const bin = binFor(ln, ctx);
-      if (bin) setCur(rec, C.LINE.holdBin, bin);
+      // Resolved in validateLine, not re-derived. One place decides which
+      // bin a row goes to, and it is the place that already refused the
+      // rows that had none.
+      if (ln.__lineBin) setCur(rec, C.LINE.holdBin, ln.__lineBin);
 
       const detail = Array.isArray(ln.inventory) ? ln.inventory : [];
       if (!detail.length) return;
+      const rowBins = ln.__rowBins || [];
 
       let sub = null;
       try {
@@ -844,7 +923,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         // TEXT, not value: the lot or serial may not exist yet, and setting it
         // by text is what makes NetSuite create it.
         subSetText(sub, map.inventoryField, String(d.serial || d.lot || ''));
-        if (bin) subSet(sub, 'binnumber', bin);
+        // THE ROW'S OWN BIN. Two lots on one line may be in two bins.
+        const rowBin = rowBins[i];
+        if (rowBin) subSet(sub, 'binnumber', rowBin);
         const exp = parseDate(d.expiry || d.expiration_date);
         if (exp) subSet(sub, 'expirationdate', exp);
         subSet(sub, 'quantity', Number(d.quantity === undefined ? 1 : d.quantity));
@@ -1226,7 +1307,8 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         try {
           moves.push(validateRelease(ln, {
             items: items, lots: lots, balance: balance, bins: bins,
-            ledger: ledger, claimed: claimed, receiptId: receiptId
+            ledger: ledger, claimed: claimed, receiptId: receiptId,
+            locationId: locationId
           }));
         } catch (e) {
           failures.push(lineFailure(ln, e));
@@ -1412,9 +1494,20 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * configuration error and the line says so - Design §9.4.
      */
     const releaseBins = (body, order, locationId, cfg) => {
+      // ── THE RELEASE IS ABOUT THE GOOD BIN ─────────────────────────────
+      //
+      //    FROM is where the receipt already put the stock. The Middleware
+      //    does not have to tell us; the location does, and the ledger
+      //    proves the stock is there. It is accepted on the payload for the
+      //    account that keeps more than one hold bin.
+      //
+      //    TO is the decision this call exists to carry. `good_bin` is its
+      //    name; `to_bin` is accepted as the older spelling.
       const out = {
-        from: String(body.from_bin || body.from_bin_id || '').trim(),
-        to: String(body.to_bin || body.to_bin_id || '').trim()
+        from: String(body.from_bin || body.from_bin_id ||
+          body.hold_bin || body.hold_bin_id || '').trim(),
+        to: String(body.good_bin || body.good_bin_id ||
+          body.to_bin || body.to_bin_id || '').trim()
       };
       if (out.from && out.to) return out;
 
@@ -1429,7 +1522,13 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         locGood = textOf(lv[L.goodBin]);
       } catch (e) { /* the fields are not deployed; the config default answers */ }
 
+      // FROM falls back to the configured Default Bin as well, because that
+      // is the same ladder the RECEIPT used to choose where to put it - the
+      // two must agree or the release looks in a bin the receipt never used.
       if (!out.from) out.from = locHold || String(cfg.defaultBin || '');
+      // TO does NOT fall back to the Default Bin. That field is the
+      // RECEIVING default; sending verified stock to it would put it back
+      // where it came from and call the job done.
       if (!out.to) out.to = locGood;
       return out;
     };
@@ -1593,8 +1692,10 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         throw err(C.LINE_ERR.BAD_QUANTITY,
           'Release line ' + key + ' has quantity "' + ln.quantity + '".');
 
-      const fromBin = String(ln.from_bin || ln.from_bin_id || ctx.bins.from || '').trim();
-      const toBin = String(ln.to_bin || ln.to_bin_id || ctx.bins.to || '').trim();
+      const fromBin = String(ln.from_bin || ln.from_bin_id ||
+        ln.hold_bin || ln.hold_bin_id || ctx.bins.from || '').trim();
+      const toBin = String(ln.good_bin || ln.good_bin_id ||
+        ln.to_bin || ln.to_bin_id || ctx.bins.to || '').trim();
       if (!fromBin)
         throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
           'Release line ' + key + ' names no from_bin, and no on-hold bin is ' +
@@ -1602,9 +1703,11 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           'nothing to move the stock out of.');
       if (!toBin)
         throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
-          'Release line ' + key + ' names no to_bin, and no good bin is set ' +
-          'on the location. Blank in the payload AND in configuration is a ' +
-          'configuration error, not a default.');
+          'Release line ' + key + ' names no good_bin, and no Good Bin is ' +
+          'set on location ' + ctx.locationId + '. Blank in both places is a ' +
+          'configuration error, not a default: the Default Bin on the ' +
+          'RapidBridge Configuration is the RECEIVING default, and releasing ' +
+          'into it would put verified stock back where it came from.');
       if (fromBin === toBin)
         throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
           'Release line ' + key + ' moves stock from bin ' + fromBin +
@@ -2474,23 +2577,75 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
     };
 
     /**
-     * §11.8 — the bin this line lands in.
+     * §11.8 — THE BIN THIS LINE LANDS IN, and the two documents want two
+     * different things from it.
      *
-     * The payload wins; otherwise a RECEIPT uses the location's on-hold bin,
-     * falling back to the configured default. A fulfilment takes only what the
-     * payload names: the stock is being ISSUED, so there is nothing to default.
+     * ── A RECEIPT WANTS THE HOLD BIN ──────────────────────────────────────
+     *
+     * Received stock has not been verified, so it lands in the location's
+     * ON-HOLD bin and stays there until `inventory_release` moves it. The
+     * GOOD bin is of no interest here: nothing on a receipt ever goes
+     * straight to it.
+     *
+     *   line `hold_bin` / `bin` -> body `hold_bin` / `bin`
+     *     -> the LOCATION's On-Hold Bin -> the configuration's Default Bin
+     *
+     * Per location, because a client with three warehouses has three
+     * receiving bins - which is why this reads the Location record rather
+     * than one account-wide setting.
+     *
+     * ── A FULFILMENT WANTS THE PICK BIN, AND HAS NO DEFAULT ───────────────
+     *
+     * The stock is being ISSUED. Only the device knows which bin it came out
+     * of, and defaulting one would relieve stock from a bin nobody picked.
+     * Payload or nothing.
      */
-    const binFor = (ln, ctx) => {
-      const named = String(ln.bin || ln.bin_id || '').trim();
+    /** A bin named ON THE PAYLOAD - row, line or body. Never a default. */
+    const payloadBin = (o) => String((o && (o.bin || o.bin_id ||
+      o.hold_bin || o.hold_bin_id)) || '').trim();
+
+    /**
+     * THE BIN FOR ONE INVENTORY ROW.
+     *
+     * ── WHY PER ROW AND NOT PER LINE ──────────────────────────────────────
+     *
+     * One line of a receipt can carry several lots, and a warehouse puts
+     * them wherever there is space: LOT-A in HOLD-01 and LOT-B in HOLD-02 is
+     * an ordinary afternoon, not an edge case. A single bin per line forced
+     * them into one, and the stock then sat somewhere the record did not
+     * say - which `inventory_release` would later refuse, correctly, as
+     * LOT_NOT_IN_BIN.
+     *
+     * The bin belongs with the lot. It is read as close to the lot as the
+     * payload puts it:
+     *
+     *   inventory row `bin` -> line `bin` -> body `bin` -> the default
+     *
+     * ── AND FOR AN ELIGIBLE ITEM THERE IS NO DEFAULT ──────────────────────
+     *
+     * An eligible item is one TrackTraceRX tracks. Where its stock went is
+     * a FACT THE OPERATOR OBSERVED, not something to infer from a
+     * configuration record: guess it and the release looks in the wrong bin,
+     * with the goods on the dock and nothing saying why.
+     *
+     * `fetch_transaction` hands the device `default_hold_bin` precisely so
+     * it can send one back. Sending it back is providing it; leaving the
+     * field out is not.
+     *
+     * A NON-eligible item still defaults - nothing tracks it, nothing holds
+     * it and nothing releases it.
+     */
+    const binForRow = (ln, d, ctx, info) => {
+      const named = payloadBin(d) || payloadBin(ln) || String(ctx.bodyBin || '');
       if (named) return named;
+      if (info && info.eligible === true) return '';     // the caller refuses
       return ctx.map.usesHoldBin ? String(ctx.holdBin || '') : '';
     };
 
     /**
-     * The on-hold bin: the LOCATION's first, the configuration's default
-     * second. Per location, because a client with three warehouses has three
-     * receiving bins — which is why this reads the Location record rather than
-     * a single account-wide setting.
+     * The receipt's DEFAULT on-hold bin - the LOCATION's, then the
+     * configuration's. The body's own `hold_bin` is NOT folded in here: it is
+     * payload, and payload is what an eligible line is allowed to rely on.
      */
     const holdBinFor = (order, cfg) =>
       String(order.holdBin || cfg.defaultBin || '');

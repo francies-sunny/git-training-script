@@ -9,9 +9,12 @@ Content-Type: application/json
 
 | Line | Item | Unit | Qty | Eligible | Lot | Bins | Consequence |
 |---|---|---|---|---|---|---|---|
-| 1 | 718 | Pallet (rate 16) | 1 | **yes** | yes | yes | `bin` **mandatory**, inventory detail mandatory |
+| 1 | 718 | Pallet (rate 16) | 1 | **yes** | yes | yes | `bin` **mandatory, per inventory row**; inventory detail mandatory |
 | 2 | 721 | Test (rate 1) | 1 | **no** | yes | yes | `bin` optional — but lot detail still mandatory, NetSuite requires it |
-| 3 | 719 | Each(1) | 2 | **yes** | yes | yes | `bin` **mandatory**, inventory detail mandatory |
+| 3 | 719 | Each(1) | 2 | **yes** | yes | yes | `bin` **mandatory, per inventory row**; inventory detail mandatory |
+
+**The bin belongs with the lot.** Put it on the `inventory` row. A line with two lots in two bins
+is ordinary, and a `bin` on the line is only a shorthand for "all of these rows".
 
 Three things the read is telling you that the payload has to answer:
 
@@ -20,6 +23,7 @@ Three things the read is telling you that the payload has to answer:
    eligible, so a missing `bin` is `BIN_REQUIRED` and the whole submission is refused.
 2. **Line 2 has no `product_uuid` and an empty `product_uuid_missing_reason`** — that is the
    non-eligible case, and nothing is wrong. It is still a real SO line that has to be fulfilled.
+   It is also the only line that does **not** need a bin.
 3. **Line 1 is in Pallets at a conversion rate of 16.** `quantity` is in the **line's unit** —
    `1` means one pallet. The inventory-detail quantities must add up to the line quantity in the
    same unit, so `1`, not `16`.
@@ -41,16 +45,14 @@ Three things the read is telling you that the payload has to answer:
       "line_unique_key": "1",
       "item_id": "718",
       "quantity": 1,
-      "bin": "REPLACE_BIN_718",
       "inventory": [
-        { "lot": "REPLACE_LOT_718", "quantity": 1 }
+        { "lot": "REPLACE_LOT_718", "quantity": 1, "bin": "REPLACE_BIN_718" }
       ]
     },
     {
       "line_unique_key": "2",
       "item_id": "721",
       "quantity": 1,
-      "bin": "REPLACE_BIN_721",
       "inventory": [
         { "lot": "REPLACE_LOT_721", "quantity": 1 }
       ]
@@ -59,9 +61,8 @@ Three things the read is telling you that the payload has to answer:
       "line_unique_key": "3",
       "item_id": "719",
       "quantity": 2,
-      "bin": "REPLACE_BIN_719",
       "inventory": [
-        { "lot": "REPLACE_LOT_719", "quantity": 2 }
+        { "lot": "REPLACE_LOT_719", "quantity": 2, "bin": "REPLACE_BIN_719" }
       ]
     }
   ]
@@ -93,19 +94,20 @@ leaves 721 on the order.
   "memo": "SO610 - tracked lines only",
   "lines": [
     { "line_unique_key": "1", "item_id": "718", "quantity": 1,
-      "bin": "REPLACE_BIN_718",
-      "inventory": [ { "lot": "REPLACE_LOT_718", "quantity": 1 } ] },
+      "inventory": [ { "lot": "REPLACE_LOT_718", "quantity": 1,
+                       "bin": "REPLACE_BIN_718" } ] },
     { "line_unique_key": "3", "item_id": "719", "quantity": 2,
-      "bin": "REPLACE_BIN_719",
-      "inventory": [ { "lot": "REPLACE_LOT_719", "quantity": 2 } ] }
+      "inventory": [ { "lot": "REPLACE_LOT_719", "quantity": 2,
+                       "bin": "REPLACE_BIN_719" } ] }
   ]
 }
 ```
 
 ## 3. Short pick — the exception path
 
-Line 3 wants 2 and only 1 is on the shelf. **An eligible line that comes up short must carry
-`exception_reason`**, or the submission is refused with `EXCEPTION_REASON_REQUIRED`.
+Line 3 wants 2 and only 1 is on the shelf. A short line on its own is just a **partial fulfilment** — the other unit stays on the order and
+ships later. It becomes an **exception** only when the device says so: `exception_reason` is the
+declaration that the rest is not coming.
 
 ```json
 {
@@ -117,13 +119,13 @@ Line 3 wants 2 and only 1 is on the shelf. **An eligible line that comes up shor
   "memo": "SO610 - short on 719",
   "lines": [
     { "line_unique_key": "1", "item_id": "718", "quantity": 1,
-      "bin": "REPLACE_BIN_718",
-      "inventory": [ { "lot": "REPLACE_LOT_718", "quantity": 1 } ] },
+      "inventory": [ { "lot": "REPLACE_LOT_718", "quantity": 1,
+                       "bin": "REPLACE_BIN_718" } ] },
     { "line_unique_key": "3", "item_id": "719", "quantity": 1,
-      "bin": "REPLACE_BIN_719",
       "exception_reason": "Short stock at the bin",
       "exception_note": "One unit damaged in the bin, quarantined",
-      "inventory": [ { "lot": "REPLACE_LOT_719", "quantity": 1 } ] }
+      "inventory": [ { "lot": "REPLACE_LOT_719", "quantity": 1,
+                       "bin": "REPLACE_BIN_719" } ] }
   ]
 }
 ```
@@ -159,9 +161,12 @@ not free text.
 
 | Change | Expected |
 |---|---|
-| Drop `bin` from line 1 | `BIN_REQUIRED` — "only the device knows where it came from". Whole submission refused |
+| Drop `bin` from line 1's inventory row | `BIN_REQUIRED`, naming **the lot** — "only the device knows where it came from". Whole submission refused |
 | Drop `bin` from line 2 only | **Succeeds.** 721 is not eligible, so NetSuite's own default stands |
-| Line 3 quantity 1 with no `exception_reason` | `EXCEPTION_REASON_REQUIRED` |
+| Two lots on one line, two different `bin` values | **Succeeds.** Each inventory assignment keeps its own bin; the line's Hold Bin column is left blank |
+| Line 3 quantity 1 with no `exception_reason` | **Succeeds.** A partial fulfilment is not an exception — the other unit stays on the order |
+| Line 3 `exception_quantity: 1` with no reason | `EXCEPTION_REASON_REQUIRED` |
+| Line 3 quantity 1, `exception_quantity: 5` | `BAD_QUANTITY` — an exception cannot exceed the shortfall |
 | Drop `inventory` from line 1 | `INVENTORY_DETAIL_MISSING` — the item is lot tracked |
 | Line 1 `quantity: 2` | `QTY_EXCEEDS_REMAINING` — only 1 pallet is outstanding |
 | Line 1 `quantity: 1`, inventory `quantity: 16` | `BAD_QUANTITY` — the detail must add up to the line, in the line's unit |
