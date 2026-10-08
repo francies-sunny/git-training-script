@@ -1,0 +1,51 @@
+<transactioncolumncustomfield scriptid="custcol_jj_rb_bin_map">
+  <accesslevel>2</accesslevel>
+  <aidescription></aidescription>
+  <applyformatting>F</applyformatting>
+  <colbuild>F</colbuild>
+  <colexpense>F</colexpense>
+  <colexpensereport>F</colexpensereport>
+  <colgrouponinvoices>F</colgrouponinvoices>
+  <colinventoryadjustment>F</colinventoryadjustment>
+  <colitemfulfillment>F</colitemfulfillment>
+  <colitemfulfillmentorder>F</colitemfulfillmentorder>
+  <colitemreceipt>T</colitemreceipt>
+  <colitemreceiptorder>F</colitemreceiptorder>
+  <coljournal>F</coljournal>
+  <colkititem>F</colkititem>
+  <colopportunity>F</colopportunity>
+  <colpackingslip>F</colpackingslip>
+  <colpickingticket>F</colpickingticket>
+  <colprintflag>F</colprintflag>
+  <colpurchase>F</colpurchase>
+  <colreturnform>F</colreturnform>
+  <colsale>F</colsale>
+  <colstorewithgroups>F</colstorewithgroups>
+  <coltransferorder>F</coltransferorder>
+  <defaultchecked>F</defaultchecked>
+  <defaultselection></defaultselection>
+  <defaultvalue></defaultvalue>
+  <description>Where each lot on this line was PUT and where the inventory release is to TAKE it, as compact JSON. Written by the RapidBridge inbound write RESTlet when it creates the Item Receipt; never edited by hand. The hold bin is also on the inventory detail, but the GOOD bin is on no other NetSuite record - a receipt does not move stock there, the release does, and that can be days later - so without this field the good bin would have to be sent again on every release or taken from one location-wide setting. SHAPE (v2): the line's own two bins go in once as "h" and "g", and only a lot that differs is listed under "l", keyed on the lot or serial NAME in upper case. Its value is a LIST OF TRIPLES, [quantity, holdBin, goodBin], with 0 meaning "same as the line". The QUANTITY is what tells apart the lot that was split: 10 of LOT-B to the cold good bin and 4 to the ambient one is the same name twice and nothing else in the record can separate them. So {"v":1,"h":936,"g":940} is an ordinary line whatever its lot count, and {"v":2,"h":936,"g":940,"l":{"LOT-B":[[10,0,941],[4,0,942]]}} is the same line with that lot split. A v1 value (a bare [hold,good] pair) still reads, as one entry of any quantity. When a lot has any odd row, EVERY row of that lot is listed, so the release is never handed half the picture. READ BACK once per Item Receipt, when the release ledger is seeded on the first release; from then on the bins live in the ledger. The release prefers its own payload over this, and this over the location's Good Bin; a quantity matching no recorded part is REFUSED rather than guessed. The field is capped at 4000 characters and is NEVER truncated: a line whose per-lot good bins will not fit is refused with BIN_MAP_TOO_LARGE.</description>
+  <displayheight>4</displayheight>
+  <displaytype>LOCKED</displaytype>
+  <displaywidth></displaywidth>
+  <dynamicdefault></dynamicdefault>
+  <encryptatrest>F</encryptatrest>
+  <fieldtype>TEXTAREA</fieldtype>
+  <help>Where each lot on this line was PUT and where the inventory release is to TAKE it, as compact JSON. Written by the RapidBridge inbound write RESTlet when it creates the Item Receipt; never edited by hand. The hold bin is also on the inventory detail, but the GOOD bin is on no other NetSuite record - a receipt does not move stock there, the release does, and that can be days later - so without this field the good bin would have to be sent again on every release or taken from one location-wide setting. SHAPE (v2): the line's own two bins go in once as "h" and "g", and only a lot that differs is listed under "l", keyed on the lot or serial NAME in upper case. Its value is a LIST OF TRIPLES, [quantity, holdBin, goodBin], with 0 meaning "same as the line". The QUANTITY is what tells apart the lot that was split: 10 of LOT-B to the cold good bin and 4 to the ambient one is the same name twice and nothing else in the record can separate them. So {"v":1,"h":936,"g":940} is an ordinary line whatever its lot count, and {"v":2,"h":936,"g":940,"l":{"LOT-B":[[10,0,941],[4,0,942]]}} is the same line with that lot split. A v1 value (a bare [hold,good] pair) still reads, as one entry of any quantity. When a lot has any odd row, EVERY row of that lot is listed, so the release is never handed half the picture. READ BACK once per Item Receipt, when the release ledger is seeded on the first release; from then on the bins live in the ledger. The release prefers its own payload over this, and this over the location's Good Bin; a quantity matching no recorded part is REFUSED rather than guessed. The field is capped at 4000 characters and is NEVER truncated: a line whose per-lot good bins will not fit is refused with BIN_MAP_TOO_LARGE.</help>
+  <isformula>F</isformula>
+  <ismandatory>F</ismandatory>
+  <label>Bin / Lot Map</label>
+  <linktext></linktext>
+  <maxlength>4000</maxlength>
+  <maxvalue></maxvalue>
+  <minvalue></minvalue>
+  <onparentdelete></onparentdelete>
+  <searchlevel>2</searchlevel>
+  <selectrecordtype></selectrecordtype>
+  <showhierarchy>F</showhierarchy>
+  <sourcefilterby></sourcefilterby>
+  <sourcefrom></sourcefrom>
+  <sourcelist></sourcelist>
+  <storevalue>T</storevalue>
+</transactioncolumncustomfield>

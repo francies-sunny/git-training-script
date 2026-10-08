@@ -510,7 +510,13 @@ define(['N/search', 'N/record'],
       // A short line on an ELIGIBLE item with no declared reason. A
       // shortfall on a regulated product is a discrepancy somebody has to
       // account for, and an unexplained one cannot be reconciled later.
-      EXCEPTION_REASON_REQUIRED: 'EXCEPTION_REASON_REQUIRED'
+      EXCEPTION_REASON_REQUIRED: 'EXCEPTION_REASON_REQUIRED',
+      // ── THE BIN / LOT MAP WILL NOT FIT ───────────────────────────────
+      // The line names more distinct good bins than 4000 characters can
+      // hold. NOT truncated: a dropped override is a lot that releases
+      // into the wrong bin, and a silent wrong bin is worse than a loud
+      // refusal. Split the line, or send one good bin for the whole of it.
+      BIN_MAP_TOO_LARGE: 'BIN_MAP_TOO_LARGE'
     });
 
     /** DOCUMENT-level error codes — a failure that is not about one line. */
@@ -868,8 +874,24 @@ define(['N/search', 'N/record'],
       //     "updated": "2026-10-05T10:11:12.000Z",
       //     "lots": {
       //       "718|901": { "item":"718", "lot":"LOT-2026-0815", "lotId":"901",
-      //                    "received":24, "released":20 }
+      //                    "received":24, "released":20,
+      //                    "h":"936", "g":"940",
+      //                    "b":[[10,"","941",10],[4,"","942",0]] }
       //     },
+      //
+      // `h` and `g` are the hold and good bins the RECEIPT recorded for
+      // that lot - read out of the line's bin/lot map when the ledger was
+      // seeded. They are the third rung of the release's bin ladder, below
+      // the release payload and above the location's own bins, and they
+      // are the only rung that can differ between two lots of one item at
+      // one site. Absent on a receipt created before the map existed, and
+      // the release falls through to the location exactly as it did then.
+      //
+      // `b` is the SAME FACT PER QUANTITY, for the lot that was split
+      // across two destinations: `[quantity, hold, good, releasedSoFar]`.
+      // The fourth number is the only part of the ledger row that the map
+      // did not supply - it is how a second release of the same lot knows
+      // which entry is already spent.
       //     "calls": [
       //       { "uuid":"f7c1...", "bt":"2492118",
       //         "at":"2026-10-05T10:11:12.000Z",
@@ -939,7 +961,74 @@ define(['N/search', 'N/record'],
       //    Written on every line this integration creates: zero when the
       //    line was received or fulfilled in full, so a blank means the
       //    line predates this field rather than "nothing was short".
-      exceptionQty: 'custcol_jj_rb_exception_qty'
+      exceptionQty: 'custcol_jj_rb_exception_qty',
+      // ── WHERE THE LOT WENT, AND WHERE IT IS GOING ────────────────────
+      //    A Text Area, capped at 4000 characters, holding one compact
+      //    JSON object per line: the HOLD bin each lot landed in and the
+      //    GOOD bin it is to be released to.
+      //
+      //    WHY IT EXISTS. The hold bin is already on the inventory detail,
+      //    but the GOOD bin is not on the receipt anywhere - the receipt
+      //    does not move stock there, the release does, and that can be
+      //    days later. Without this field the good bin has to be sent
+      //    again on the release or read from the location, and the
+      //    location's is one bin for every item at that site. A warehouse
+      //    that puts cold lots in one good bin and ambient in another had
+      //    no way to say so.
+      //
+      //    SHAPE - see C.BIN_MAP. The line's own bins are the DEFAULT and
+      //    only lots that differ are listed, so the ordinary line is about
+      //    twenty characters whatever its lot count:
+      //
+      //      {"v":1,"h":936,"g":940}
+      //      {"v":1,"h":936,"g":940,"l":{"LOT-B":[937,941]}}
+      //
+      //    Keyed on the lot NAME, upper-cased, because at the moment the
+      //    line is written the lot may not exist in NetSuite yet - the
+      //    save is what creates it - and the release knows it by name too.
+      binMap: 'custcol_jj_rb_bin_map',
+      // ── THE RELEASE BALANCE, AS NUMBERS ON THE LINE ──────────────────
+      //    The ledger is the AUTHORITY on what may still move, and it is
+      //    JSON on a body field - which is exactly the wrong shape for a
+      //    warehouse supervisor asking "what is still sitting on hold?".
+      //    These four are the same facts in a form a saved search can
+      //    filter, total and group.
+      //
+      //    They are DERIVED from the ledger and rewritten on every
+      //    release. Nothing reads them back: a number a human can edit is
+      //    not a duplicate guard, and the ledger stays the authority.
+      releasedQty: 'custcol_jj_rb_released_qty',
+      holdQty: 'custcol_jj_rb_hold_qty',
+      releasedOn: 'custcol_jj_rb_released_on',
+      releaseBin: 'custcol_jj_rb_release_bin'
+    });
+
+    /**
+     * THE BIN / LOT MAP, in one place because the writer and the reader
+     * have to agree to the character.
+     *
+     * MAX is the field's own limit. A Text Area in NetSuite takes 100,000
+     * characters, but this one is DECLARED at 4000 so the value stays
+     * something a person can read on the form and a saved search can show
+     * in a column. The writer refuses a line whose per-lot overrides will
+     * not fit rather than truncating: a dropped override is a lot released
+     * into the wrong bin, which is the failure this field exists to stop.
+     */
+    const BIN_MAP = Object.freeze({
+      // ── v2 ADDED THE QUANTITY ────────────────────────────────────────
+      // v1 keyed each exception on the lot name alone: `"L2":[hold,good]`.
+      // That cannot describe the receipt where 10 of LOT-B went to the
+      // cold good bin and 4 of it to the ambient one - the same lot, two
+      // destinations, and nothing in the key to tell them apart.
+      //
+      // v2 makes the value a LIST OF TRIPLES, `[quantity, hold, good]`:
+      //
+      //   {"v":2,"h":936,"g":940,"l":{"L2":[[10,0,941],[4,0,942]]}}
+      //
+      // A quantity of 0 means "any quantity" and is what a v1 map is read
+      // as, so a receipt written before this still releases.
+      VERSION: 2,
+      MAX: 4000
     });
 
     /**
@@ -1373,7 +1462,7 @@ define(['N/search', 'N/record'],
       TXN_STATUS, INBOUND, LINE_ERR, DOC_ERR, IF_STATUS, ORIGIN_MW,
       // reads
       READ_ERR, READ_NOTE, READ_NOTE_REVIEW, READ_EXPECTED, READ_PAGE, LOG_REASON,
-      RELEASE_LEDGER, BIN_PROPS
+      RELEASE_LEDGER, BIN_PROPS, BIN_MAP
     });
 
     // ═══════════════════════════════════════════════════════════════════════════

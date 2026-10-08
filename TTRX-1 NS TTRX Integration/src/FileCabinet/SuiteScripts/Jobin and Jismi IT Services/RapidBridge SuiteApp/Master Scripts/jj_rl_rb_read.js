@@ -929,7 +929,7 @@ define(['N/record', 'N/search', 'N/runtime',
           util.scannableStatusNames(s.recordType).join(', ') +
           (statusRow && statusRow.sync
             ? '. It is still synchronized with TrackTraceRX; it simply has ' +
-            'nothing left to receive or fulfil.'
+              'nothing left to receive or fulfil.'
             : '.'));
 
       const txnUuid = textOf(head[C.TXN.uuid]);
@@ -1123,6 +1123,9 @@ define(['N/record', 'N/search', 'N/runtime',
           ' Until then the device must not offer these lines: a scan against ' +
           'them is refused at submit, with the goods already on the dock.');
 
+      const defaults = s.recordType === 'purchaseorder'
+        ? defaultBins(textOf(head.location), cfg) : { hold: null, good: null };
+
       return {
         internal_id: String(orderId),
         record_type: s.recordType,
@@ -1140,11 +1143,16 @@ define(['N/record', 'N/search', 'N/runtime',
         memo: textOf(head.memo),
         transaction_uuid: txnUuid,
         shipment_uuid: textOf(head[C.TXN.shipmentUuid]),
-        // Where a receipt's stock lands before verification — §11.8. The
-        // device shows it so the operator is not asked for a bin the account
-        // has already decided.
+        // Where a receipt's stock lands before verification, and where the
+        // release will later take it — §11.8. Both shown so the operator is
+        // not asked for a bin the account has already decided, and both
+        // accepted back on the submission: `hold_bin` is used by the
+        // receipt, `good_bin` is only RECORDED by it, on the line's bin/lot
+        // map, for the release that comes days later.
         default_hold_bin: s.recordType === 'purchaseorder'
-          ? holdBinFor(textOf(head.location), cfg) : null,
+          ? defaults.hold : null,
+        default_good_bin: s.recordType === 'purchaseorder'
+          ? defaults.good : null,
         line_count: lines.length,
         // Named out loud rather than left for the device to work out, because
         // submitting one of these is the failure the operator cannot undo.
@@ -1176,7 +1184,7 @@ define(['N/record', 'N/search', 'N/runtime',
         search.create({
           type: s.recordType,
           filters: [['mainline', 'is', 'T'], 'AND',
-          (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
+            (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
           columns: ['internalid']
         }).run().each((r) => { hit = String(r.id); return false; });
       } catch (e) {
@@ -1232,7 +1240,7 @@ define(['N/record', 'N/search', 'N/runtime',
         // matches nothing, so an item with perfectly good allowed bins comes
         // back with none and the device is told it cannot scan.
         const filters = [['internalid', 'anyof', itemId], 'AND',
-        ['binNumber.inactive', 'is', 'F']];
+          ['binNumber.inactive', 'is', 'F']];
         if (loc) filters.push('AND', ['binNumber.location', 'anyof', loc]);
         search.create({
           type: 'item',
@@ -1666,9 +1674,9 @@ define(['N/record', 'N/search', 'N/runtime',
           matchedUnit: '',
           reason: Object.keys(rows).length
             ? 'NO_ROW: the item has no UOM Detail row for unit "' +
-            (unitName || C.BASE_UNIT) + '". It has: ' +
-            Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
-            'unit, or correct the Saleable Unit on an existing one.'
+              (unitName || C.BASE_UNIT) + '". It has: ' +
+              Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
+              'unit, or correct the Saleable Unit on an existing one.'
             : 'NO_ROW: the item has no UOM Detail rows at all.'
         };
       }
@@ -1685,17 +1693,37 @@ define(['N/record', 'N/search', 'N/runtime',
      * LOCATION's first, the configuration's default second. Read here so the
      * device can show it rather than ask for it.
      */
-    const holdBinFor = (locationId, cfg) => {
-      if (!locationId) return String((cfg && cfg.defaultBin) || '') || null;
+    const holdBinFor = (locationId, cfg) => defaultBins(locationId, cfg).hold;
+
+    /**
+     * BOTH DEFAULTS IN ONE READ.
+     *
+     * The HOLD bin is where a receipt's stock lands before verification -
+     * the LOCATION's first, the configuration's Default Bin second.
+     *
+     * The GOOD bin is where the release will later take it. It has NO
+     * fallback to the Default Bin: that field is the RECEIVING default, and
+     * offering it as a release destination would send verified stock back
+     * where it came from.
+     *
+     * Both are OFFERED, not imposed. The device shows them so the operator
+     * is not asked for a bin the account has already decided, and sends
+     * back whichever it ends up using - or something else entirely, which
+     * is the whole reason the receipt records what it was told.
+     */
+    const defaultBins = (locationId, cfg) => {
+      const out = { hold: null, good: null };
+      const fallback = String((cfg && cfg.defaultBin) || '') || null;
+      if (!locationId) { out.hold = fallback; return out; }
       try {
         const L = C.MASTER.location.fields;
         const v = search.lookupFields({
-          type: 'location', id: locationId, columns: [L.holdBin]
+          type: 'location', id: locationId, columns: [L.holdBin, L.goodBin]
         });
-        const bin = textOf(v[L.holdBin]);
-        if (bin) return bin;
-      } catch (e) { /* field not deployed; the default answers */ }
-      return String((cfg && cfg.defaultBin) || '') || null;
+        out.hold = textOf(v[L.holdBin]) || fallback;
+        out.good = textOf(v[L.goodBin]) || null;
+      } catch (e) { out.hold = fallback; }
+      return out;
     };
 
     // ═══════════════════════════════════════════════════════════════════════════

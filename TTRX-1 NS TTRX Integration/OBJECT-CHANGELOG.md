@@ -2450,3 +2450,256 @@ New document. Everything the **Middleware asks of NetSuite**:
 
 Both built on the v3.0 template — same cover, styles, numbering and footer — and verified by
 rendering to PDF and reading every page.
+
+---
+
+## Pass 31 — the hold bin defaults again, and the receipt remembers the good bin
+
+Two changes that look unrelated and are the same change: the device should be asked for what
+only it knows, and nothing else.
+
+### 1. The location's On-Hold Bin answers for an eligible item again
+
+Pass 29 refused any eligible line that did not name a bin on the payload, reasoning that where
+tracked stock went is a fact the operator observed rather than something to infer. That is true of
+where it **ended up** and false of where it was **put**:
+
+> A receiving dock with one on-hold bin puts everything in it. Making the device restate that on
+> every line bought nothing and refused the most ordinary receipt in the building.
+
+The location's On-Hold Bin is a configured fact about the site, not a guess. The ladder is whole
+again:
+
+```
+row `bin` -> line `bin` / `hold_bin` -> body `bin` / `hold_bin`
+  -> the LOCATION's On-Hold Bin -> the Configuration's Default Bin
+```
+
+What survives from Pass 29 is the **order**. The payload is still consulted first, row before line
+before body, so the afternoon where LOT-A went to HOLD-01 and LOT-B to HOLD-02 still records both.
+
+`BIN_REQUIRED` is still thrown — but now only when the bottom of that ladder is reached with
+nothing, which is a configuration gap. The message says so, and names the location:
+
+> `location Main Warehouse (5) has no On-Hold Bin and the RapidBridge Configuration has no Default
+> Bin. Set one of those and an ordinary receipt needs no bin on the payload at all.`
+
+A **fulfilment** still has no rung below the payload. Stock is being issued and only the device
+knows which bin it came out of.
+
+### 2. `custcol_jj_rb_bin_map` — where the lot went, and where it is going
+
+The hold bin is on the inventory detail. The **good** bin is on no NetSuite record at all: a
+receipt does not move stock there, the release does, and that can be days later. Until now the
+good bin had to be sent again on every release or taken from one location-wide setting — so an
+account with a cold good bin and an ambient one had no way to say which lot went where.
+
+A **Text Area, 4000 characters**, on the Item Receipt line only.
+
+**The shape is built to not need the space.** The line's own two bins go in once, and only a lot
+that *differs* earns an entry:
+
+```json
+{"v":1,"h":936,"g":940}
+{"v":1,"h":936,"g":940,"l":{"L2":[0,941]}}
+```
+
+Twenty-three characters for an ordinary line **whatever its lot count** — four hundred lots in one
+good bin cost exactly as much as one. `0` is the sentinel for "same as the line". Keyed on the lot
+or serial NAME, upper-cased, because when the line is written the lot may not exist in NetSuite
+yet — the save is what creates it — and the release knows it by name too.
+
+**It is never truncated.** A line whose per-lot good bins will not fit is refused with
+`BIN_MAP_TOO_LARGE`. Per-lot *hold* bins are dropped first if dropping buys the fit, because they
+are also on the inventory detail and can be read back; a good bin exists nowhere else and is never
+dropped. A dropped entry is a lot that would later release into a bin nobody chose, found by a
+reconciliation weeks afterwards.
+
+### 3. The release's bin ladder gained a middle rung
+
+```
+1. the release line's own `good_bin`
+2. the release body's `good_bin`
+3. THE GOOD BIN THE RECEIPT RECORDED FOR THAT LOT      <- new
+4. the LOCATION's Good Bin
+```
+
+Rung 3 is the only one that can differ between two lots of one item at one site. It sits below the
+payload because a release that names a bin is a decision somebody is making now, and above the
+location because a site-wide setting cannot know which lot this is. `from_bin` reads the same
+ladder with the receipt's hold bin at rung 3.
+
+`releaseBins` now returns **four** values — `from`/`to` (payload) and `fromLoc`/`toLoc`
+(configuration) — rather than collapsing them. Folding the location in at that point would have
+made rung 4 beat rung 3 and quietly lost the distinction.
+
+**The map is read ONCE per receipt**, when the release ledger is seeded, and carried into each lot
+row as `h` and `g`. Every later release answers from the stored ledger — no extra search, and
+entitlement and destination are measured against one record.
+
+### 4. Three consequences that had to be chased down
+
+**The Bin Transfer is grouped by item AND both bins**, not by item. Once the ladder could answer
+differently for two lots of one item, one line per item was wrong in both shapes: a tracked item
+would have carried the first lot's bins on the line while its inventory detail said otherwise, and
+a **non-tracked** item has no inventory detail at all, so the line *is* the move and the second
+lot's bins would simply have been discarded.
+
+**`readHeldBalance` searches every bin the release could read from** — payload, location, and every
+`h` in the ledger. A search that only knew the body bin would come back empty for exactly the lots
+that went somewhere else, and an empty result reads as a stale index, which would have silently
+skipped the physical check on the rows that most need it.
+
+**The envelope's `from_bin` / `to_bin` report the RESOLVED pair**, and only when every line agreed
+on one. `lines_released[].from_bin` / `.to_bin` always carry the per-line answer.
+
+### 5. `fetch_transaction` now offers `default_good_bin`
+
+Beside `default_hold_bin`, from the location, with no fallback to the Default Bin — that field is
+the RECEIVING default and offering it as a release destination would send verified stock back
+where it came from. Both are **offered, not imposed**: the device shows them so the operator is not
+asked for a bin the account has already decided, and sends back whichever it uses.
+
+### 6. Validated at receipt time, not discovered at release time
+
+A named good bin is checked as hard as a hold bin even though nothing moves there today —
+`BIN_NOT_ALLOWED` if it does not exist, `BIN_INVALID_LOCATION` if it is at another site (a Bin
+Transfer cannot cross locations, so the release could never make that move), `BIN_NOT_CONFIGURED`
+if it is the same bin the stock is being received into. One cached lookup now, instead of a failure
+in a week with the goods received and the operator long gone.
+
+**936 assertions across 15 suites.** `t15` (62) is new: the four-rung hold ladder, the map's shape
+and its 23-character floor, the refusal at 400 distinct good bins, the release reading the stored
+bin, the payload still beating it, two lots to two good bins across two Bin Transfer lines, and a
+corrupt map being ignored rather than obeyed.
+
+---
+
+## Pass 32 — nothing releases a non-tracked item, so stop putting it on hold
+
+Four changes. The first three follow from one sentence: **there is no release for an item
+TrackTraceRX does not track.**
+
+### 1. A non-eligible line lands in the GOOD bin, not the hold bin
+
+Pass 31 gave every item the same ladder, ending in the location's On-Hold Bin. For an item nothing
+tracks that is the wrong destination:
+
+> It was never going to be verified, nothing is waiting on it, and `inventory_release` refuses it
+> by name. Putting it in the on-hold bin strands ordinary stock behind a gate that never opens.
+
+So the ladder forks on eligibility:
+
+```
+ELIGIBLE      row/line/body `bin`|`hold_bin`
+                -> LOCATION On-Hold Bin -> CONFIG Default Bin
+
+NON-ELIGIBLE  row/line/body `bin`|`hold_bin`
+                -> row/line/body `good_bin`
+                -> LOCATION Good Bin
+```
+
+A payload hold bin still wins for a non-eligible line — the operator saw where it went. But below
+that it goes somewhere it can be **picked from**. The Configuration's Default Bin is gone from that
+path entirely: it is the *receiving* default, and falling back to it would put the line on hold
+after all.
+
+`BIN_REQUIRED` now fires for a non-eligible receipt line too, when the item uses bins and the
+ladder runs out. The message points at the location's **Good** Bin, because telling someone to set
+the On-Hold Bin would be advice that does not work. A **fulfilment** is unchanged: no ladder for
+anyone, and a non-eligible line is still left to NetSuite.
+
+A non-eligible line also records **no** good bin on the map. It is already sitting in it, and a
+destination for a move that will never happen is a bin the release is forbidden to act on.
+
+### 2. The Bin Transfer is one line per item, with the bins on the detail
+
+The shape the Middleware sends and the shape NetSuite wants turned out to be the same shape:
+
+```json
+[{"item":"A","quantity":13,"inventory":[
+  {"lot":1,"quantity":10,"from_bin":49,"to_bin":50},
+  {"lot":2,"quantity":1, "from_bin":48,"to_bin":50},
+  {"lot":3,"quantity":1, "from_bin":49,"to_bin":51},
+  {"lot":3,"quantity":1, "from_bin":48,"to_bin":51}]}]
+```
+
+Look at the last two rows: **the same lot, out of two hold bins, into two good bins.** That is what
+a shared on-hold bin produces in practice, and Pass 31's grouping by (item, from, to) could not say
+it on one line.
+
+So: one inventory line per item carrying the total, one inventory-assignment row per movement with
+its own pair of bins. Line-level `binnumber`/`tobinnumber` are set only when the whole line agrees
+— for a tracked item they are decoration, and naming one of several would contradict the rows
+beneath.
+
+**Except** an item that is neither lot nor serial tracked has no inventory detail at all. For it
+the line *is* the move, so those still group by item and both bins. And a tracked item whose
+subrecord will not open now **throws** rather than saving: putting the whole quantity through the
+first pair of bins is worse than not saving.
+
+### 3. The release balance is on the receipt's own lines
+
+The ledger is the authority and it is JSON on a body field — exactly the wrong shape for the
+question a supervisor asks, which is *"what is still sitting on hold?"*. A saved search cannot
+filter inside a Long Text, total it or group by it.
+
+Four line columns, revived from dead:
+
+| Column | |
+|---|---|
+| `custcol_jj_rb_released_qty` | how much of this line has moved to a good bin |
+| `custcol_jj_rb_hold_qty` | what is left — received minus released |
+| `custcol_jj_rb_released_on` | when the last release touched this line |
+| `custcol_jj_rb_release_bin` | where it went, when the whole line agreed on one |
+
+Both numbers are written on every release, **zero included**, so a blank means the line predates
+the field rather than "nothing has been released".
+
+**Nothing reads them back.** They are derived from the ledger and rewritten in full each time. A
+number a human can edit is not a duplicate guard, and making one load-bearing is how a
+hand-corrected figure ends up authorising a second release of the same lot.
+
+This needed `record.load` + `save` instead of `submitFields` — sublist values have no other route.
+If that save fails for any reason, the body alone is retried through `submitFields`, because a
+release that moved stock and did not record it is the one outcome worth a second attempt. The line
+columns are a convenience; the ledger is the guard.
+
+### 4. The bin/lot map v2 — the quantity is part of the key
+
+v1 kept one pair per lot name. It cannot describe the receipt where **10 of LOT-B went to the cold
+good bin and 4 to the ambient one**: same name, two destinations, nothing to tell them apart.
+
+v2 makes the value a list of triples, `[quantity, hold, good]`:
+
+```json
+{"v":2,"h":936,"g":940,"l":{"LOT-B":[[10,0,941],[4,0,942]]}}
+```
+
+And **if a lot has one odd row, every row of that lot is listed.** Recording only the row that
+differs would leave the release holding one entry for a lot that was split — and "one entry" reads
+as "this is the whole story", which is how a release ends up confidently putting 4 units in the bin
+meant for 10.
+
+The ledger carries the entries as `b`, with a fourth number for how much each has already spent, so
+a second release cannot hand out the same 10 twice.
+
+**Selection refuses rather than guesses:**
+
+| Situation | Answer |
+|---|---|
+| nothing recorded | fall through to the location |
+| one entry left | that one, whatever the quantity |
+| an exact match on an entry's remaining quantity | that one |
+| several entries, all agreeing on one good bin | that bin — split by quantity, not by destination |
+| anything else | **no answer** — the line is refused |
+
+A release of 7 against a 10/4 split is refused with `BIN_NOT_CONFIGURED` listing both parts
+(`10 -> 96, 14 -> 95`) and saying what to do: name `good_bin` on the line, or release each part in
+its own line. A v1 map still releases, read as one entry of "any quantity".
+
+**973 assertions across 15 suites.** `t15` (95) covers the forked ladder and its refusal, the v2
+map with quantities, the one-line-per-item Bin Transfer with two lots through two bin pairs, the
+split-lot selection including the refusal and the payload override, the line balance columns across
+two releases, an untouched line keeping a blank date, and the submitFields fallback when the
+receipt will not save.

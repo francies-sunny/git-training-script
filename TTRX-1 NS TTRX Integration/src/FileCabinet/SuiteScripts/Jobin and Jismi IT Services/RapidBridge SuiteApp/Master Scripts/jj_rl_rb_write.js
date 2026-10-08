@@ -472,7 +472,13 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         // The body's own bin — payload, and the last payload-level answer
         // before the default.
         bodyBin: payloadBin(body),
-        holdBin: map.usesHoldBin ? holdBinFor(order, cfg) : ''
+        // Recorded, never used by the receipt. The release reads it back.
+        bodyGoodBin: map.usesHoldBin ? payloadGoodBin(body) : '',
+        holdBin: map.usesHoldBin ? holdBinFor(order, cfg) : '',
+        // The LOCATION's Good Bin. Read for the receipt because a
+        // NON-eligible line ends its ladder there - it is never released,
+        // so it must land somewhere it can be picked from.
+        locGoodBin: map.usesHoldBin ? locationGoodBin(order.locationId) : ''
       };
 
       // ── THE LINE LOOP. Collect, then decide. NEVER return on the first
@@ -795,8 +801,19 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // kept on the line for applyLine, which must not re-derive them: a
       // validator and an applier that compute the same thing twice are a
       // validator and an applier that will one day disagree.
+      //
+      // TWO bins per row now, not one. The HOLD bin is where this receipt
+      // is putting the stock; the GOOD bin is where the release is to take
+      // it, recorded here because the receipt is the only moment anybody
+      // knows it and the release can be days later.
       const rows = detail.length ? detail : [null];
       const bins = rows.map((d) => binForRow(ln, d, ctx, info));
+      // A non-eligible line is already SITTING in its good bin: the ladder
+      // put it there, because nothing will ever release it. Recording a
+      // destination for a move that will never happen would put a bin on
+      // the map that the release is forbidden to act on.
+      const goods = (ctx.map.usesHoldBin && info.eligible === true)
+        ? rows.map((d) => goodBinForRow(ln, d, ctx)) : rows.map(() => '');
       ln.__rowBins = detail.length ? bins : [];
 
       const rowName = (d) => (d
@@ -807,33 +824,56 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       for (let i = 0; i < rows.length; i++) {
         const bin = bins[i];
 
-        // ══ AN ELIGIBLE ITEM MUST BE TOLD WHERE ITS STOCK WENT ══════════
+        // ══ AN ELIGIBLE ITEM MUST END UP SOMEWHERE NAMED ════════════════
         //
-        // Not a preference, and NOT satisfiable by a configuration record.
-        // Where a tracked lot physically landed is a fact the operator
-        // observed; infer it and `inventory_release` looks in the wrong bin
-        // with the goods on the dock and nothing saying why.
+        // The ladder is payload, then the location's On-Hold Bin, then the
+        // configured Default Bin. Reaching the bottom of it with nothing
+        // means the account has no receiving bin set anywhere, which is a
+        // configuration gap and not something to paper over: an eligible
+        // item that lands wherever NetSuite defaults breaks the
+        // hold-then-release flow before it starts, because the release has
+        // no bin to move it out of.
         //
-        // `fetch_transaction` returns `default_hold_bin` so the device can
-        // send it back. Sending it back IS providing it; leaving the field
-        // out is not.
-        if (!bin && ctx.cfg.useBins === true && info.eligible === true)
+        // A FULFILMENT has no rungs below the payload at all. Only the
+        // device knows which bin the stock came out of, and defaulting one
+        // would relieve stock from a bin nobody picked.
+        // A NON-eligible line is refused only on a RECEIPT. A fulfilment
+        // has no ladder below the payload for anyone, and a line this
+        // integration will never see again is left to NetSuite's own
+        // picking rather than refused over a bin nobody asked for.
+        if (!bin && ctx.cfg.useBins === true &&
+          (info.eligible === true ||
+            (ctx.map.usesHoldBin && info.useBins === true))) {
+          const at = txn.named(ctx.order.locationName, ctx.order.locationId);
           throw err(C.LINE_ERR.BIN_REQUIRED,
             'No bin for ' + rowName(rows[i]) + ' on line ' +
-            ln.line_unique_key + ' (' + txn.named(info.name, itemId) +
-            '), which is eligible for TrackTraceRX. ' + (ctx.map.usesHoldBin
-              ? 'Send `bin` on the inventory row - different lots may go to ' +
-              'different bins - or on the line, or on the body. ' +
-              'fetch_transaction returns default_hold_bin (' +
-              (ctx.holdBin || 'none configured on location ' +
-                txn.named(ctx.order.locationName, ctx.order.locationId)) +
-              ') for the device to send back. It is NOT applied ' +
-              'automatically: where tracked stock went is observed, not ' +
-              'assumed, and a wrong bin here is a release that cannot ' +
-              'find its goods.'
-              : 'Send `bin` on the inventory row or the line - the bin the ' +
+            ln.line_unique_key + ' (' + txn.named(info.name, itemId) + '). ' +
+            (!ctx.map.usesHoldBin
+              ? 'Send `bin` on the inventory row or the line - the bin the ' +
               'stock was picked from. A fulfilment has no default: only ' +
-              'the device knows where it came from.'));
+              'the device knows where it came from.'
+              : info.eligible === true
+                ? 'The item is eligible for TrackTraceRX, so its stock goes ' +
+                'ON HOLD until a release moves it. Send `bin` on the ' +
+                'inventory row - different lots may go to different bins - ' +
+                'or on the line, or on the body. Nothing answered below ' +
+                'that either: location ' + at + ' has no On-Hold Bin and ' +
+                'the RapidBridge Configuration has no Default Bin. Set one ' +
+                'of those and an ordinary receipt needs no bin on the ' +
+                'payload at all.'
+                // ── THE NON-ELIGIBLE REFUSAL, AND IT POINTS SOMEWHERE
+                //    DIFFERENT. Nothing will ever release this line, so it
+                //    must not be sent to a hold bin - and the ladder that
+                //    would have ended there has been replaced by one that
+                //    ends in the GOOD bin. Saying "set the On-Hold Bin"
+                //    here would be advice that does not work.
+                : 'The item is NOT tracked by TrackTraceRX, so nothing will ' +
+                'ever release it and it must not go on hold. It needs a ' +
+                'bin it can be PICKED from: send `bin` or `good_bin` on ' +
+                'the row, line or body, or set a Good Bin on location ' +
+                at + '. The On-Hold Bin and the Default Bin are both ' +
+                'receiving defaults and neither is used for this line.'));
+        }
 
         if (bin && ctx.cfg.useBins === true) {
           const b = binInfo(bin, ctx);
@@ -847,6 +887,38 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
               'Bin ' + txn.named(b.name, bin) + ', named for ' +
               rowName(rows[i]) + ' on line ' + ln.line_unique_key +
               ', is not at the order\'s location.');
+        }
+
+        // ══ AND THE GOOD BIN, IF ONE WAS NAMED ══════════════════════════
+        //
+        // Validated to the same standard as the hold bin even though
+        // nothing moves there today. A good bin that does not exist, or
+        // belongs to another site, is a release that will fail in a week
+        // with the goods already received and the operator long gone. It
+        // costs one cached lookup to say so now.
+        const good = goods[i];
+        if (good && ctx.cfg.useBins === true) {
+          const g = binInfo(good, ctx);
+          if (!g.exists)
+            throw err(C.LINE_ERR.BIN_NOT_ALLOWED,
+              'Good bin ' + good + ' named for ' + rowName(rows[i]) +
+              ' on line ' + ln.line_unique_key + ' does not exist. It is ' +
+              'not used by this receipt - it is recorded for the release - ' +
+              'but a bin that does not exist now will not exist then.');
+          if (g.location && ctx.order.locationId
+            && String(g.location) !== String(ctx.order.locationId))
+            throw err(C.LINE_ERR.BIN_INVALID_LOCATION,
+              'Good bin ' + txn.named(g.name, good) + ', named for ' +
+              rowName(rows[i]) + ' on line ' + ln.line_unique_key +
+              ', is not at the order\'s location. A Bin Transfer cannot ' +
+              'cross locations, so the release could never make that move.');
+          if (good === bins[i])
+            throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+              'The good bin named for ' + rowName(rows[i]) + ' on line ' +
+              ln.line_unique_key + ' is the same bin the stock is being ' +
+              'received into. The release would move it to where it ' +
+              'already is and report the job done, with unverified stock ' +
+              'never having left the hold.');
         }
       }
 
@@ -863,22 +935,30 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             line: ln.line_unique_key, item: itemId, bins: distinct,
             effect: 'Each inventory row carries its own bin. The line\'s ' +
               'Hold Bin column is left blank: naming one of several would ' +
-              'imply the rest.'
+              'imply the rest. The bin/lot map on the line names them all.'
           }
         });
 
-      // A NON-eligible line with no bin is left to NetSuite. It is not
-      // tracked, it is never held and it is never released, so there is
-      // nothing for this integration to lose track of.
+      // ══ THE BIN / LOT MAP ════════════════════════════════════════════
+      //
+      // Written on a RECEIPT only. A fulfilment issues stock and has no
+      // release behind it, so there is nothing for a map to be read back
+      // for. THROWS BIN_MAP_TOO_LARGE, which is why it is here in the
+      // validator and not in applyLine - applyLine may not throw.
+      ln.__binMap = ctx.map.usesHoldBin
+        ? binMapJson(rows, bins, goods, ln.line_unique_key) : '';
+
+      // An item whose own record says it does not use bins is left to
+      // NetSuite entirely. There is nothing to refuse and nothing to
+      // record: the account is not binning that item.
       if (!distinct.length && ctx.map.usesHoldBin && ctx.cfg.useBins === true &&
-        info.useBins && info.eligible !== true)
+        info.useBins !== true)
         log.audit({
-          title: 'RB inbound - no bin on a non-eligible line',
+          title: 'RB inbound - the item does not use bins',
           details: {
             line: ln.line_unique_key, item: itemId,
-            effect: 'Left to NetSuite\'s own default. The line is not ' +
-              'tracked by TrackTraceRX, so it is never held and never ' +
-              'released.'
+            effect: 'Left to NetSuite\'s own handling. Use Bins is off on ' +
+              'the item record, so there is no bin to name.'
           }
         });
     };
@@ -904,6 +984,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // bin a row goes to, and it is the place that already refused the
       // rows that had none.
       if (ln.__lineBin) setCur(rec, C.LINE.holdBin, ln.__lineBin);
+      // WHERE EACH LOT WENT AND WHERE IT IS GOING. Built and size-checked
+      // in validateLine; here it is only written.
+      if (ln.__binMap) setCur(rec, C.LINE.binMap, ln.__binMap);
 
       const detail = Array.isArray(ln.inventory) ? ln.inventory : [];
       if (!detail.length) return;
@@ -1246,8 +1329,10 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           'location_id, or an order_id or item_receipt_internal_id that ' +
           'carries one.', null, receiptId);
 
-      // ── THE TWO BINS. The payload wins; configuration answers otherwise.
-      //    Blank in both places is a configuration error, not a default.
+      // ── THE TWO BINS, in two layers: what the PAYLOAD said and what
+      //    CONFIGURATION says. The receipt's own per-lot memory goes
+      //    between them, which is why they are not collapsed here.
+      //    Blank at the bottom of that ladder is a configuration error.
       const bins = releaseBins(body, order, locationId, cfg);
 
       // ── THE ITEMS FIRST. Eligibility decides what the ledger is even
@@ -1293,7 +1378,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       //    submission, not per line. Lots first, because the balance search
       //    needs the ids the names resolve to.
       const lots = readLotsByName(lines, items);
-      const balance = readHeldBalance(lines, locationId, bins);
+      const balance = readHeldBalance(lines, locationId, bins, ledger);
 
       // ── THE LINE LOOP. Collect, then decide. Rule 1 is the same here as on
       //    a receipt: ONE Bin Transfer for the whole release or none at all.
@@ -1384,7 +1469,12 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         title: 'RB release created Bin Transfer ' + btId,
         details: {
           orderId: orderId || null, receiptId: receiptId,
-          locationId: locationId, fromBin: bins.from, toBin: bins.to,
+          locationId: locationId,
+          // The RESOLVED bins, per line. `bins` holds only what the body
+          // said, and after the ladder gained the receipt's own map a blank
+          // there no longer means a blank on the transfer.
+          bins: moves.map((m) => m.fromBin + '->' + m.toBin).filter(
+            (v, i, a) => a.indexOf(v) === i),
           lines: moves.length, movedNow: posted.movedNow,
           releasedTotal: released, held: held,
           ledgerWritten: posted.written, overRelease: posted.overRelease
@@ -1397,7 +1487,12 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         item_receipt_internal_id: receiptId,
         order_id: orderId || '',
         location_id: locationId,
-        from_bin: bins.from, to_bin: bins.to,
+        // THE RESOLVED pair, not what the body happened to say. Reported
+        // only when the whole release agreed on one: once the bin ladder
+        // could answer per lot, a single document-level bin could be a
+        // half-truth, and `lines_released[].from_bin` / `.to_bin` always
+        // carry the per-line answer anyway.
+        from_bin: oneOf(moves, 'fromBin'), to_bin: oneOf(moves, 'toBin'),
         // THIS CALL moved this much.
         moved_quantity: posted.movedNow,
         // THE RECEIPT stands at this, cumulatively. The two differ on every
@@ -1486,20 +1581,46 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
     };
 
     /**
-     * The two bins, each resolved once for the whole release.
+     * THE TWO BINS, resolved once for the whole release — but kept in TWO
+     * layers, because a middle rung sits between them.
      *
-     * A line may still override either. The order of preference is the same
-     * both ways: THE PAYLOAD, then the LOCATION's configured bin, then the
-     * RapidBridge Configuration's default. Blank at the end of that is a
-     * configuration error and the line says so - Design §9.4.
+     *   from / to     what the PAYLOAD said. Body level; a line overrides.
+     *   fromLoc/toLoc what CONFIGURATION says. The last word, not the first.
+     *
+     * They are not collapsed here, and that is the point. The full order of
+     * preference for one release line is:
+     *
+     *   1. the line's own `good_bin`
+     *   2. the body's `good_bin`                          <- out.to
+     *   3. THE GOOD BIN THE RECEIPT RECORDED FOR THAT LOT <- the ledger
+     *   4. the LOCATION's Good Bin                        <- out.toLoc
+     *
+     * Rung 3 is the one this split exists for. It is the receipt's own
+     * memory of what the device said when the goods arrived, and it has to
+     * beat a location-wide setting: an account that puts cold lots in one
+     * good bin and ambient in another has nothing else that can say so.
+     * Folding the location in at this point would have made rung 4 win
+     * over rung 3 and quietly lose the distinction.
+     *
+     * Blank at the bottom of the ladder is a configuration error and the
+     * line says so - Design §9.4.
      */
+    /** The value every move agrees on, or '' when they do not. */
+    const oneOf = (moves, field) => {
+      const seen = [];
+      moves.forEach((m) => {
+        const v = String(m[field] || '');
+        if (v && seen.indexOf(v) === -1) seen.push(v);
+      });
+      return seen.length === 1 ? seen[0] : '';
+    };
+
     const releaseBins = (body, order, locationId, cfg) => {
       // ── THE RELEASE IS ABOUT THE GOOD BIN ─────────────────────────────
       //
       //    FROM is where the receipt already put the stock. The Middleware
-      //    does not have to tell us; the location does, and the ledger
-      //    proves the stock is there. It is accepted on the payload for the
-      //    account that keeps more than one hold bin.
+      //    does not have to tell us; the receipt's map does, then the
+      //    location, and the ledger proves the stock is there.
       //
       //    TO is the decision this call exists to carry. `good_bin` is its
       //    name; `to_bin` is accepted as the older spelling.
@@ -1507,9 +1628,10 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         from: String(body.from_bin || body.from_bin_id ||
           body.hold_bin || body.hold_bin_id || '').trim(),
         to: String(body.good_bin || body.good_bin_id ||
-          body.to_bin || body.to_bin_id || '').trim()
+          body.to_bin || body.to_bin_id || '').trim(),
+        fromLoc: '',
+        toLoc: ''
       };
-      if (out.from && out.to) return out;
 
       let locHold = String(order.holdBin || '');
       let locGood = '';
@@ -1525,11 +1647,11 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // FROM falls back to the configured Default Bin as well, because that
       // is the same ladder the RECEIPT used to choose where to put it - the
       // two must agree or the release looks in a bin the receipt never used.
-      if (!out.from) out.from = locHold || String(cfg.defaultBin || '');
+      out.fromLoc = locHold || String(cfg.defaultBin || '');
       // TO does NOT fall back to the Default Bin. That field is the
       // RECEIVING default; sending verified stock to it would put it back
       // where it came from and call the job done.
-      if (!out.to) out.to = locGood;
+      out.toLoc = locGood;
       return out;
     };
 
@@ -1597,17 +1719,30 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * the item's own quantity fields, the receipt's lines - answers a
      * different question and would let a release move stock that is not there.
      */
-    const readHeldBalance = (lines, locationId, bins) => {
+    const readHeldBalance = (lines, locationId, bins, ledger) => {
       const out = { rows: {}, indexed: false };
       const itemIds = [];
       const binIds = [];
       const seen = {};
+      const addBin = (b) => {
+        const k = String(b || '');
+        if (k && !seen['b' + k]) { seen['b' + k] = true; binIds.push(k); }
+      };
       lines.forEach((l) => {
         const id = String(l.item_id || '');
         if (id && !seen['i' + id]) { seen['i' + id] = true; itemIds.push(id); }
-        const b = String(l.from_bin || l.from_bin_id || bins.from || '');
-        if (b && !seen['b' + b]) { seen['b' + b] = true; binIds.push(b); }
+        addBin(l.from_bin || l.from_bin_id || l.hold_bin || l.hold_bin_id);
       });
+      // EVERY BIN THE RELEASE COULD POSSIBLY READ FROM, not only the one
+      // the body named. A per-lot hold bin recorded on the receipt is a
+      // rung of the ladder now, so a balance search that only knew the body
+      // bin would come back empty for exactly the lots that moved somewhere
+      // else - and an empty result reads as a stale index, which would
+      // silently skip the physical check on the rows that most need it.
+      addBin(bins.from);
+      addBin(bins.fromLoc);
+      if (ledger && ledger.lots)
+        Object.keys(ledger.lots).forEach((k) => addBin(ledger.lots[k].h));
       if (!itemIds.length || !binIds.length || !locationId) return out;
 
       const S = search.Summary;
@@ -1692,29 +1827,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         throw err(C.LINE_ERR.BAD_QUANTITY,
           'Release line ' + key + ' has quantity "' + ln.quantity + '".');
 
-      const fromBin = String(ln.from_bin || ln.from_bin_id ||
-        ln.hold_bin || ln.hold_bin_id || ctx.bins.from || '').trim();
-      const toBin = String(ln.good_bin || ln.good_bin_id ||
-        ln.to_bin || ln.to_bin_id || ctx.bins.to || '').trim();
-      if (!fromBin)
-        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
-          'Release line ' + key + ' names no from_bin, and no on-hold bin is ' +
-          'set on the location or the RapidBridge Configuration. There is ' +
-          'nothing to move the stock out of.');
-      if (!toBin)
-        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
-          'Release line ' + key + ' names no good_bin, and no Good Bin is ' +
-          'set on location ' + ctx.locationId + '. Blank in both places is a ' +
-          'configuration error, not a default: the Default Bin on the ' +
-          'RapidBridge Configuration is the RECEIVING default, and releasing ' +
-          'into it would put verified stock back where it came from.');
-      if (fromBin === toBin)
-        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
-          'Release line ' + key + ' moves stock from bin ' + fromBin +
-          ' to the same bin. A transfer that changes nothing is a ' +
-          'misconfiguration, not a no-op worth saving.');
-
-      // ── THE LOT. By NAME, which is the only thing the Middleware has.
+      // ── THE LOT. Resolved BEFORE the bins now, because the receipt's
+      //    own memory of this lot's bins is one rung of the bin ladder and
+      //    the lot is what addresses it.
       const lotName = String(ln.lot || ln.lot_number || ln.lot_name || '').trim();
       const tracked = info.isLot || info.isSerial;
       let lot = null;
@@ -1740,6 +1855,70 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             'asked for.');
         }
       }
+
+      // ══ THE BINS, FOUR RUNGS EACH ══════════════════════════════════════
+      //
+      //   1. the LINE's own bin           - this call, this lot
+      //   2. the BODY's bin               - this call, every lot
+      //   3. WHAT THE RECEIPT RECORDED    - the bin/lot map, per lot
+      //   4. the LOCATION's configured bin
+      //
+      // Rung 3 is what the Item Receipt's bin/lot map stored at the moment
+      // the goods arrived, carried into the ledger when it was seeded. It
+      // is the only rung that can be different for two lots of the same
+      // item at the same site, which is precisely what a warehouse with a
+      // cold good bin and an ambient one needs.
+      //
+      // It sits BELOW the payload because a release that names a bin is a
+      // decision somebody is making now, and above the location because a
+      // site-wide setting cannot know which lot this is.
+      const stored = ctx.ledger.lots[lotLedgerKey(itemId, lot ? lot.id : '')] || {};
+      const pick = entryForRelease(stored, qty) || {};
+      const paidFrom = String(ln.from_bin || ln.from_bin_id ||
+        ln.hold_bin || ln.hold_bin_id || ctx.bins.from || '').trim();
+      const paidTo = String(ln.good_bin || ln.good_bin_id ||
+        ln.to_bin || ln.to_bin_id || ctx.bins.to || '').trim();
+
+      // ── THE RECEIPT SPLIT THIS LOT AND THIS QUANTITY FITS NEITHER PART
+      //
+      //    10 went to the cold bin and 4 to the ambient one; a release of
+      //    7 belongs to neither. The payload can still say which - that is
+      //    a decision somebody is making now - but nothing here will pick
+      //    one, because a guessed bin on a regulated product is the exact
+      //    failure the map exists to prevent.
+      if (pick.ambiguous && !paidTo)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' asks to move ' + qty + ' of ' +
+          (lot ? 'lot "' + lot.name + '" ' : '') + 'but Item Receipt ' +
+          ctx.receiptId + ' split that lot across good bins and ' + qty +
+          ' matches none of the parts: ' + pick.ambiguous.join(', ') + '. ' +
+          'Send `good_bin` on the release line to say which, or release ' +
+          'each part in its own line with the quantity the receipt ' +
+          'recorded. Nothing is chosen for you here - a guessed bin on a ' +
+          'tracked lot is what this record exists to prevent.');
+
+      const fromBin = String(paidFrom || pick.h || ctx.bins.fromLoc || '').trim();
+      const toBin = String(paidTo || pick.g || ctx.bins.toLoc || '').trim();
+      if (!fromBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' names no from_bin, Item Receipt ' +
+          ctx.receiptId + ' recorded none for this lot, and no on-hold bin ' +
+          'is set on the location or the RapidBridge Configuration. There ' +
+          'is nothing to move the stock out of.');
+      if (!toBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' names no good_bin, Item Receipt ' +
+          ctx.receiptId + ' recorded none for this lot, and no Good Bin is ' +
+          'set on location ' + ctx.locationId + '. Blank in all three ' +
+          'places is a configuration error, not a default: the Default Bin ' +
+          'on the RapidBridge Configuration is the RECEIVING default, and ' +
+          'releasing into it would put verified stock back where it came ' +
+          'from.');
+      if (fromBin === toBin)
+        throw err(C.LINE_ERR.BIN_NOT_CONFIGURED,
+          'Release line ' + key + ' moves stock from bin ' + fromBin +
+          ' to the same bin. A transfer that changes nothing is a ' +
+          'misconfiguration, not a no-op worth saving.');
 
       // ══ THE LEDGER. THE AUTHORITY ON WHAT MAY STILL MOVE. ═══════════════
       //
@@ -1815,7 +1994,11 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         lineKey: key, key: lk, itemId: itemId, itemName: info.name || '',
         lotId: lot ? lot.id : '', lotName: lot ? lot.name : (row.lot || ''),
         quantity: qty, received: received, releasedBefore: already,
-        fromBin: fromBin, toBin: toBin
+        fromBin: fromBin, toBin: toBin,
+        // WHICH split entry this spent, so commitLedger can mark it. -1 or
+        // undefined means the lot was never split and there is nothing to
+        // mark.
+        entry: pick.i === undefined ? -1 : pick.i
       };
     };
 
@@ -1857,34 +2040,78 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       catch (e) { /* mandatory - the save will say so */ }
 
       const d = parseDate(o.date);
-      if (d) { try { bt.setValue({ fieldId: 'trandate', value: d }); } catch (e) { } }
+      if (d) {
+        try { bt.setValue({ fieldId: 'trandate', value: d }); } catch (e) {
+          log.error('Error @ release buildBinTransfer trandate', e);
+        }
+      }
       try {
         bt.setValue({
           fieldId: 'memo',
           value: String(o.memo || 'RapidBridge inventory release ' + o.requestUuid)
             .substring(0, 999)
         });
-      } catch (e) { }
+      } catch (e) {
+        log.error('Error @ release buildBinTransfer memo', e);
+      }
 
-      // Group the moves by item, preserving the order they arrived in.
+      // ══ ONE LINE PER ITEM, AND THE BINS GO ON THE DETAIL ══════════════
+      //
+      // The shape the Middleware sends and the shape NetSuite wants are
+      // the same shape:
+      //
+      //   [{ "item":"A", "quantity":13, "inventory":[
+      //       {"lot":1,"quantity":10,"from_bin":49,"to_bin":50},
+      //       {"lot":2,"quantity":1, "from_bin":48,"to_bin":50},
+      //       {"lot":3,"quantity":1, "from_bin":49,"to_bin":51},
+      //       {"lot":3,"quantity":1, "from_bin":48,"to_bin":51}]}]
+      //
+      // One inventory line carrying the item and the total, and one
+      // inventory-assignment row per movement, each with its own pair of
+      // bins. Note the last two: the SAME LOT, out of two different hold
+      // bins, into two different good bins. That is what a shared on-hold
+      // bin produces in practice and no line-level pair of bins can
+      // express it.
+      //
+      // ── EXCEPT WHEN THERE IS NO DETAIL TO PUT THEM ON ─────────────────
+      //
+      // An item that is neither lot nor serial tracked has no inventory
+      // detail subrecord at all, so for it the LINE is the move and the
+      // bins have nowhere else to go. Those are grouped by item AND both
+      // bins, one line per distinct movement - otherwise the second
+      // movement's bins would simply be discarded.
       const order = [];
-      const byItem = {};
+      const byKey = {};
       moves.forEach((m) => {
-        if (!byItem[m.itemId]) { byItem[m.itemId] = []; order.push(m.itemId); }
-        byItem[m.itemId].push(m);
+        const info = (o.items || {})[m.itemId] || {};
+        const tracked = info.isLot === true || info.isSerial === true || !!m.lotId;
+        const k = tracked
+          ? m.itemId
+          : m.itemId + '|' + m.fromBin + '|' + m.toBin;
+        if (!byKey[k]) { byKey[k] = { tracked: tracked, moves: [] }; order.push(k); }
+        byKey[k].moves.push(m);
       });
 
-      order.forEach((itemId) => {
-        const group = byItem[itemId];
-        const total = group.reduce((n, m) => n + m.quantity, 0);
+      order.forEach((k) => {
+        const group = byKey[k].moves;
+        const itemId = group[0].itemId;
+        const total = round6(group.reduce((n, m) => n + m.quantity, 0));
 
         bt.selectNewLine({ sublistId: 'inventory' });
         btSet(bt, 'item', itemId);
         btSet(bt, 'quantity', total);
-        // The non-tracked shape: the bins live on the line itself.
-        btSet(bt, 'binnumber', group[0].fromBin);
-        btSet(bt, 'tobinnumber', group[0].toBin);
-        btSet(bt, 'previousbinnumber', group[0].fromBin);
+
+        // The line-level bins are set only when the whole line agrees on
+        // them. For a tracked item they are decoration - NetSuite derives
+        // the movement from the inventory detail - and naming one of
+        // several there would contradict the rows beneath it.
+        const from = oneOf(group, 'fromBin');
+        const to = oneOf(group, 'toBin');
+        if (from) {
+          btSet(bt, 'binnumber', from);
+          btSet(bt, 'previousbinnumber', from);
+        }
+        if (to) btSet(bt, 'tobinnumber', to);
 
         let sub = null;
         try {
@@ -1905,6 +2132,16 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             subSet(sub, 'quantity', m.quantity);
             sub.commitLine({ sublistId: 'inventoryassignment' });
           });
+        } else if (byKey[k].tracked && group.length > 1) {
+          // A tracked item whose subrecord would not open. The bins cannot
+          // all be expressed on one line, and saving it would move the
+          // whole quantity through the first pair.
+          throw new Error('Item ' + itemId + ' moves ' + group.length +
+            ' lots through different bins, but its inventory detail could ' +
+            'not be opened on the Bin Transfer. The bins can only be ' +
+            'recorded per lot on that subrecord, so NOTHING was saved ' +
+            'rather than moving all ' + total + ' through ' +
+            group[0].fromBin + ' -> ' + group[0].toBin + '.');
         }
 
         bt.commitLine({ sublistId: 'inventory' });
@@ -2091,7 +2328,20 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       return seeded;
     };
 
-    const addEntitlement = (ledger, itemId, lotId, lotName, qty) => {
+    /**
+     * ONE ENTITLEMENT ROW, and the two bins that belong to it.
+     *
+     * `h` and `g` come from the LINE's bin/lot map - what the device said
+     * when the goods arrived. They are carried into the ledger at seed time
+     * so that every later release answers from one stored field instead of
+     * re-reading the receipt's lines, and so that a release is measuring
+     * entitlement and destination against the same record.
+     *
+     * Only written when there is something to write. A receipt created
+     * before the map existed seeds rows with neither, and the release falls
+     * through to the location's bins exactly as it did then.
+     */
+    const addEntitlement = (ledger, itemId, lotId, lotName, qty, entries) => {
       const k = lotLedgerKey(itemId, lotId);
       const row = ledger.lots[k] ||
       {
@@ -2100,11 +2350,24 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       };
       row.received = (Number(row.received) || 0) + (Number(qty) || 0);
       if (!row.lot && lotName) row.lot = String(lotName);
+      if (entries && entries.length) {
+        // ONE entry of quantity 0 is the line's own pair, not a split, so
+        // it is stored flat as h/g and the release reads it as "any
+        // quantity". Anything else is the split, and `b` keeps it with a
+        // fourth number for how much has gone.
+        if (entries.length === 1 && !entries[0].q) {
+          if (entries[0].h && !row.h) row.h = String(entries[0].h);
+          if (entries[0].g && !row.g) row.g = String(entries[0].g);
+        } else if (!row.b) {
+          row.b = entries.map((e) => [e.q, e.h || '', e.g || '', 0]);
+        }
+      }
       ledger.lots[k] = row;
     };
 
     const seedFromSearch = (receiptId, ledger) => {
       let rows = 0;
+      const mapCache = {};
       try {
         search.create({
           type: 'itemreceipt',
@@ -2115,23 +2378,25 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             'item',
             search.createColumn({ name: 'inventorynumber', join: 'inventoryDetail' }),
             search.createColumn({ name: 'quantity', join: 'inventoryDetail' }),
-            'quantity'
+            'quantity',
+            // WHERE THE DEVICE SAID EACH LOT WENT, AND WHERE IT GOES NEXT.
+            // One column on a search that was already running; the map is
+            // parsed once per distinct line value, not once per row.
+            C.LINE.binMap
           ]
         }).run().each((r) => {
           const itemId = String(r.getValue('item') || '');
           if (!itemId) return true;
-          const lotId = String(r.getValue({
-            name: 'inventorynumber', join: 'inventoryDetail'
-          }) || '');
-          const lotName = r.getText({
-            name: 'inventorynumber', join: 'inventoryDetail'
-          }) || '';
-          const dq = Number(r.getValue({
-            name: 'quantity', join: 'inventoryDetail'
-          }));
+          const lotId = String(r.getValue({ name: 'inventorynumber', join: 'inventoryDetail' }) || '');
+          const lotName = r.getText({ name: 'inventorynumber', join: 'inventoryDetail' }) || '';
+          const dq = Number(r.getValue({ name: 'quantity', join: 'inventoryDetail' }));
           const lq = Math.abs(Number(r.getValue('quantity')) || 0);
+          let raw = '';
+          try { raw = String(r.getValue(C.LINE.binMap) || ''); } catch (e) { raw = ''; }
+          if (raw && !mapCache[raw]) mapCache[raw] = parseBinMap(raw);
           addEntitlement(ledger, itemId, lotId, lotName,
-            Math.abs(dq || 0) || (lotId ? 0 : lq));
+            Math.abs(dq || 0) || (lotId ? 0 : lq),
+            raw ? binMapFor(mapCache[raw], lotName) : null);
           rows++;
           return true;
         });
@@ -2166,6 +2431,8 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         const itemId = String(g('item') || '');
         if (!itemId) continue;
         const lineQty = Math.abs(Number(g('quantity')) || 0);
+        // The line's bin/lot map, parsed once per line.
+        const lineMap = parseBinMap(g(C.LINE.binMap));
 
         let sub = null;
         try {
@@ -2175,14 +2442,17 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         } catch (e) { sub = null; }
 
         if (!sub) {
-          addEntitlement(ledger, itemId, '', '', lineQty);
+          addEntitlement(ledger, itemId, '', '', lineQty, binMapFor(lineMap, ''));
           rows++;
           continue;
         }
         let m = 0;
         try { m = sub.getLineCount({ sublistId: 'inventoryassignment' }); }
         catch (e) { m = 0; }
-        if (!m) { addEntitlement(ledger, itemId, '', '', lineQty); rows++; continue; }
+        if (!m) {
+          addEntitlement(ledger, itemId, '', '', lineQty, binMapFor(lineMap, ''));
+          rows++; continue;
+        }
         for (let j = 0; j < m; j++) {
           const sg = (f, text) => {
             try {
@@ -2191,10 +2461,11 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
                 : sub.getSublistValue({ sublistId: 'inventoryassignment', fieldId: f, line: j });
             } catch (e) { return ''; }
           };
+          const nm = String(sg('receiptinventorynumber', true) ||
+            sg('issueinventorynumber', true) || '');
           addEntitlement(ledger, itemId,
             String(sg('receiptinventorynumber') || sg('issueinventorynumber') || ''),
-            String(sg('receiptinventorynumber', true) || sg('issueinventorynumber', true) || ''),
-            Math.abs(Number(sg('quantity')) || 0));
+            nm, Math.abs(Number(sg('quantity')) || 0), binMapFor(lineMap, nm));
           rows++;
         }
       }
@@ -2256,6 +2527,12 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             item: r.item, lotId: r.lotId, lot: r.lot,
             received: Number(r.received) || 0, released: Number(r.released) || 0
           };
+          // The bins the receipt recorded. Carried through the FIRST write
+          // or they are lost: the seed is in memory only, and the next
+          // release reads this field, not the receipt's lines.
+          if (r.h) ledger.lots[k].h = String(r.h);
+          if (r.g) ledger.lots[k].g = String(r.g);
+          if (r.b) ledger.lots[k].b = r.b.map((t) => t.slice());
         });
         // And if even that is empty - a corrupt field cleared by hand - at
         // least record what this call knows, rather than writing nothing.
@@ -2293,6 +2570,16 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           received: m.received, released: 0
         };
         row.released = round6((Number(row.released) || 0) + m.quantity);
+        // A row invented here (a hand-cleared field) still learns its bins
+        // from the move that is being recorded against it.
+        if (!row.h && m.fromBin) row.h = String(m.fromBin);
+        if (!row.g && m.toBin) row.g = String(m.toBin);
+        // AND THE SPLIT ENTRY THIS MOVE SPENT. Without this the lot that
+        // was received 10-to-one-bin and 4-to-another would hand the same
+        // 10 to a second release, which is the whole reason the entries
+        // carry a fourth number.
+        if (m.entry >= 0 && Array.isArray(row.b) && row.b[m.entry])
+          row.b[m.entry][3] = round6((Number(row.b[m.entry][3]) || 0) + m.quantity);
         if (row.released > (Number(row.received) || 0) + 1e-9)
           over.push((m.lotName || m.itemName || m.itemId) + ': released ' +
             row.released + ' of ' + row.received + ' received');
@@ -2338,24 +2625,50 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       let written = true;
       try {
-        record.submitFields({
-          type: 'itemreceipt', id: receiptId, values: values,
-          options: { ignoreMandatoryFields: true }
-        });
+        // LOAD AND SAVE, not submitFields. The ledger is a body field and
+        // submitFields would do, but the per-line balance columns are
+        // sublist values and there is no other way to reach them. One
+        // extra load per release buys a receipt a warehouse supervisor can
+        // read without parsing JSON.
+        writeReceiptAndLines(receiptId, values, ledger, moves);
       } catch (e) {
-        written = false;
-        // THIS IS SERIOUS AND IT IS SAID SO. The stock moved and the ledger
-        // does not know. The next release will see the old figures and may
-        // move it again.
-        log.error({
-          title: 'RB release LEDGER NOT WRITTEN: itemreceipt/' + receiptId,
-          details: {
-            binTransfer: btId, requestUuid: requestUuid, error: (e && e.message) || String(e),
-            consequence: 'The transfer SAVED and the receipt does not record ' +
-              'it. A later release will measure against stale figures and ' +
-              'could move the same lot again. Reconcile by hand.'
-          }
-        });
+        // The LINE columns are a convenience; the LEDGER is the guard. If
+        // the load-and-save failed for any reason - a locked period, a
+        // mandatory field somebody added to the form - try once more for
+        // the body alone, because a release that moved stock and did not
+        // record it is the one outcome worth a second attempt.
+        try {
+          record.submitFields({
+            type: 'itemreceipt', id: receiptId, values: values,
+            options: { ignoreMandatoryFields: true }
+          });
+          log.audit({
+            title: 'RB release - line balances not written, ledger was',
+            details: {
+              receiptId: receiptId, binTransfer: btId,
+              error: (e && e.message) || String(e),
+              effect: 'The per-line Quantity Released and Quantity On Hold ' +
+                'columns are stale on this receipt. The ledger is correct ' +
+                'and it is what every later release measures against.'
+            }
+          });
+        } catch (e2) {
+          written = false;
+          // THIS IS SERIOUS AND IT IS SAID SO. The stock moved and the ledger
+          // does not know. The next release will see the old figures and may
+          // move it again.
+          log.error({
+            title: 'RB release LEDGER NOT WRITTEN: itemreceipt/' + receiptId,
+            details: {
+              binTransfer: btId, requestUuid: requestUuid,
+              error: (e2 && e2.message) || String(e2),
+              firstAttempt: (e && e.message) || String(e),
+              consequence: 'The transfer SAVED and the receipt does not record ' +
+                'it. A later release will measure against stale figures and ' +
+                'could move the same lot again. Reconcile by hand.'
+            }
+          });
+        }
       }
 
       return {
@@ -2378,6 +2691,157 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         bts: ledger.bts.slice(),
         perLot: perLotReleased(ledger, moves)
       };
+    };
+
+    /**
+     * THE RECEIPT, BODY AND LINES, IN ONE SAVE.
+     *
+     * ── WHY THE LINES AT ALL ──────────────────────────────────────────────
+     *
+     * The ledger is the authority and it is JSON on a body field, which is
+     * exactly the wrong shape for the question a warehouse supervisor
+     * actually asks: "what is still sitting on hold?". A saved search
+     * cannot filter inside a Long Text, cannot total it and cannot group
+     * by it.
+     *
+     * So the same facts are written again as NUMBERS on the line:
+     *
+     *   Quantity Released  how much of this line has moved to a good bin
+     *   Quantity On Hold   what is left - received minus released
+     *   Released On        when the last release touched this line
+     *   Released To Bin    where it went, when the whole line agreed on one
+     *
+     * NOTHING READS THEM BACK. They are derived on every release and
+     * rewritten in full. A number a human can edit is not a duplicate
+     * guard, and making one load-bearing is how a hand-corrected figure
+     * ends up authorising a second release of the same lot.
+     *
+     * ── MATCHING A LEDGER ROW TO A LINE ───────────────────────────────────
+     *
+     * The ledger keys on item and lot; the line knows its item and, through
+     * its inventory detail, its lots. A tracked line claims the rows for
+     * the lots it actually carries, which is right even when the same item
+     * appears on two lines with different lots. A line with no detail
+     * claims the item's unkeyed row.
+     *
+     * Where two lines DO carry the same item and the same lot - legal, and
+     * rare - both would claim the row and the pair would double-count. That
+     * is said out loud rather than papered over, and the ledger is still
+     * correct.
+     */
+    const writeReceiptAndLines = (receiptId, values, ledger, moves) => {
+      const rec = record.load({
+        type: 'itemreceipt', id: receiptId, isDynamic: false
+      });
+      Object.keys(values).forEach((f) => {
+        try { rec.setValue({ fieldId: f, value: values[f] }); }
+        catch (e) {
+          log.audit({
+            title: 'RB release - itemreceipt.' + f + ' would not set',
+            details: (e && e.message) || String(e)
+          });
+        }
+      });
+
+      // What THIS call moved, per item|lot, so only the lines it touched
+      // get a new Released On.
+      const touched = {};
+      (moves || []).forEach((m) => {
+        const k = lotLedgerKey(m.itemId, m.lotId);
+        if (!touched[k]) touched[k] = [];
+        touched[k].push(String(m.toBin || ''));
+      });
+
+      let n = 0;
+      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) { n = 0; }
+      const claimed = {};
+      const now = new Date();
+
+      for (let i = 0; i < n; i++) {
+        let itemId = '';
+        try {
+          itemId = String(rec.getSublistValue({
+            sublistId: 'item', fieldId: 'item', line: i
+          }) || '');
+        } catch (e) { itemId = ''; }
+        if (!itemId) continue;
+
+        // The lots this line carries.
+        const keys = [];
+        let sub = null;
+        try {
+          sub = rec.getSublistSubrecord({
+            sublistId: 'item', fieldId: 'inventorydetail', line: i
+          });
+        } catch (e) { sub = null; }
+        if (sub) {
+          let m = 0;
+          try { m = sub.getLineCount({ sublistId: 'inventoryassignment' }); }
+          catch (e) { m = 0; }
+          for (let j = 0; j < m; j++) {
+            let id = '';
+            try {
+              id = String(sub.getSublistValue({
+                sublistId: 'inventoryassignment',
+                fieldId: 'receiptinventorynumber', line: j
+              }) || '');
+            } catch (e) { id = ''; }
+            const k = lotLedgerKey(itemId, id);
+            if (keys.indexOf(k) === -1) keys.push(k);
+          }
+        }
+        if (!keys.length) keys.push(lotLedgerKey(itemId, ''));
+
+        let received = 0, releasedQ = 0, touchedLine = false;
+        const bins = [];
+        keys.forEach((k) => {
+          const row = ledger.lots[k];
+          if (!row) return;
+          if (claimed[k])
+            log.audit({
+              title: 'RB release - one ledger row, two receipt lines',
+              details: {
+                receiptId: receiptId, key: k, lines: [claimed[k], i],
+                effect: 'Both lines report the same released quantity, so ' +
+                  'the two columns add up to more than the receipt. The ' +
+                  'ledger and the body totals are correct; only the line ' +
+                  'columns double-count.'
+              }
+            });
+          claimed[k] = i;
+          received += Number(row.received) || 0;
+          releasedQ += Number(row.released) || 0;
+          if (touched[k]) {
+            touchedLine = true;
+            touched[k].forEach((b) => {
+              if (b && bins.indexOf(b) === -1) bins.push(b);
+            });
+          }
+        });
+        if (!keys.filter((k) => ledger.lots[k]).length) continue;
+
+        const set = (f, v) => {
+          if (!f) return;
+          try {
+            rec.setSublistValue({ sublistId: 'item', fieldId: f, line: i, value: v });
+          } catch (e) { /* the column is not on this form */ }
+        };
+        // ALWAYS both numbers, zero included. A blank means the line
+        // predates the field, not that nothing has been released - which
+        // is the difference between a reconciliation that can be trusted
+        // and one that cannot.
+        set(C.LINE.releasedQty, round6(releasedQ));
+        set(C.LINE.holdQty, round6(Math.max(received - releasedQ, 0)));
+        if (touchedLine) {
+          set(C.LINE.releasedOn, now);
+          // One bin only when the line went to one. Naming one of several
+          // would imply the rest, and the inventory detail of the Bin
+          // Transfer already holds the truth per lot.
+          if (bins.length === 1) set(C.LINE.releaseBin, bins[0]);
+        }
+      }
+
+      return rec.save({ enableSourcing: false, ignoreMandatoryFields: true });
     };
 
     const perLotReleased = (ledger, moves) => {
@@ -2577,22 +3041,44 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
     };
 
     /**
-     * §11.8 — THE BIN THIS LINE LANDS IN, and the two documents want two
-     * different things from it.
+     * §11.8 — THE BINS THIS LINE TOUCHES, and the two documents want two
+     * different things from them.
      *
-     * ── A RECEIPT WANTS THE HOLD BIN ──────────────────────────────────────
+     * ── A RECEIPT WANTS THE HOLD BIN, AND THE LOCATION KNOWS IT ───────────
      *
-     * Received stock has not been verified, so it lands in the location's
-     * ON-HOLD bin and stays there until `inventory_release` moves it. The
-     * GOOD bin is of no interest here: nothing on a receipt ever goes
-     * straight to it.
+     * Received stock has not been verified, so it lands in the ON-HOLD bin
+     * and stays there until `inventory_release` moves it.
      *
-     *   line `hold_bin` / `bin` -> body `hold_bin` / `bin`
+     *   row `bin` -> line `bin` / `hold_bin` -> body `bin` / `hold_bin`
      *     -> the LOCATION's On-Hold Bin -> the configuration's Default Bin
      *
-     * Per location, because a client with three warehouses has three
+     * PER LOCATION, because a client with three warehouses has three
      * receiving bins - which is why this reads the Location record rather
-     * than one account-wide setting.
+     * than one account-wide setting. The payload still wins: a device that
+     * names a bin observed it, and an observation beats a default.
+     *
+     * ── PASS 29 MADE THE DEFAULT UNREACHABLE FOR AN ELIGIBLE ITEM. ────────
+     *
+     * It refused any eligible line that did not name a bin, on the grounds
+     * that where tracked stock went is observed rather than inferred. That
+     * is true of where it ENDED UP and not true of where it was PUT: a
+     * receiving dock with one on-hold bin puts everything in it, and making
+     * the device restate that on every line bought nothing and refused the
+     * most ordinary receipt in the building. The location's On-Hold Bin is
+     * a configured fact about the site, not a guess, and it answers for an
+     * eligible item the same as for any other.
+     *
+     * What survives from Pass 29 is the ORDER: the payload is consulted
+     * first, row before line before body, so the one afternoon where LOT-A
+     * went to HOLD-01 and LOT-B to HOLD-02 still records both.
+     *
+     * ── A RECEIPT MAY ALSO BE TOLD THE GOOD BIN ───────────────────────────
+     *
+     * Not to use - a receipt never moves stock to a good bin - but to
+     * REMEMBER, in the line's bin/lot map, for the release that comes
+     * later. Same ladder, no default: the location's Good Bin is read at
+     * release time, and freezing it into the receipt would mean a
+     * configuration change never took effect on stock already received.
      *
      * ── A FULFILMENT WANTS THE PICK BIN, AND HAS NO DEFAULT ───────────────
      *
@@ -2604,8 +3090,12 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
     const payloadBin = (o) => String((o && (o.bin || o.bin_id ||
       o.hold_bin || o.hold_bin_id)) || '').trim();
 
+    /** The GOOD bin named on the payload. `to_bin` is the older spelling. */
+    const payloadGoodBin = (o) => String((o && (o.good_bin || o.good_bin_id ||
+      o.to_bin || o.to_bin_id)) || '').trim();
+
     /**
-     * THE BIN FOR ONE INVENTORY ROW.
+     * THE HOLD BIN FOR ONE INVENTORY ROW.
      *
      * ── WHY PER ROW AND NOT PER LINE ──────────────────────────────────────
      *
@@ -2617,38 +3107,323 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * LOT_NOT_IN_BIN.
      *
      * The bin belongs with the lot. It is read as close to the lot as the
-     * payload puts it:
+     * payload puts it, and only then does the location answer:
      *
-     *   inventory row `bin` -> line `bin` -> body `bin` -> the default
+     *   inventory row `bin` -> line `bin` -> body `bin` -> ctx.holdBin
      *
-     * ── AND FOR AN ELIGIBLE ITEM THERE IS NO DEFAULT ──────────────────────
-     *
-     * An eligible item is one TrackTraceRX tracks. Where its stock went is
-     * a FACT THE OPERATOR OBSERVED, not something to infer from a
-     * configuration record: guess it and the release looks in the wrong bin,
-     * with the goods on the dock and nothing saying why.
-     *
-     * `fetch_transaction` hands the device `default_hold_bin` precisely so
-     * it can send one back. Sending it back is providing it; leaving the
-     * field out is not.
-     *
-     * A NON-eligible item still defaults - nothing tracks it, nothing holds
-     * it and nothing releases it.
+     * `ctx.holdBin` is already the location's On-Hold Bin falling back to
+     * the configured Default Bin - see holdBinFor. A FULFILMENT has no such
+     * default and gets nothing.
      */
     const binForRow = (ln, d, ctx, info) => {
       const named = payloadBin(d) || payloadBin(ln) || String(ctx.bodyBin || '');
       if (named) return named;
-      if (info && info.eligible === true) return '';     // the caller refuses
-      return ctx.map.usesHoldBin ? String(ctx.holdBin || '') : '';
+      if (!ctx.map.usesHoldBin) return '';          // a fulfilment, no default
+      // ── AN ITEM NOTHING TRACKS DOES NOT GO ON HOLD ──────────────────
+      //
+      // There is no release for it. It was never going to be verified,
+      // nothing is waiting on it, and `inventory_release` refuses it by
+      // name. Putting it in the on-hold bin would strand ordinary stock
+      // behind a gate that never opens for it.
+      //
+      // So its ladder ends somewhere it can be PICKED FROM:
+      //
+      //   payload hold bin -> payload GOOD bin -> the LOCATION's Good Bin
+      //
+      // The location's On-Hold Bin and the configured Default Bin are
+      // both receiving defaults and neither is offered.
+      if (info && info.eligible !== true)
+        return goodBinForRow(ln, d, ctx) || String(ctx.locGoodBin || '');
+      return String(ctx.holdBin || '');
     };
 
     /**
+     * THE GOOD BIN FOR ONE INVENTORY ROW. Payload only, same three rungs.
+     *
+     * No default, deliberately. A blank here does not fail anything: the
+     * release falls through to the location's Good Bin, read at the moment
+     * it is needed rather than copied here and left to go stale.
+     */
+    const goodBinForRow = (ln, d, ctx) =>
+      payloadGoodBin(d) || payloadGoodBin(ln) || String(ctx.bodyGoodBin || '');
+
+    /**
      * The receipt's DEFAULT on-hold bin - the LOCATION's, then the
-     * configuration's. The body's own `hold_bin` is NOT folded in here: it is
-     * payload, and payload is what an eligible line is allowed to rely on.
+     * configuration's. The body's own `hold_bin` is NOT folded in here: it
+     * is payload, and binForRow consults payload first in its own right.
      */
     const holdBinFor = (order, cfg) =>
       String(order.holdBin || cfg.defaultBin || '');
+
+    /**
+     * The LOCATION's Good Bin. No fallback to the Configuration's Default
+     * Bin, which is the RECEIVING default: a non-eligible line that fell
+     * back to it would land on hold after all, which is the one place it
+     * must not be.
+     */
+    const locationGoodBin = (locationId) => {
+      if (!locationId) return '';
+      try {
+        const L = C.MASTER.location.fields;
+        const v = search.lookupFields({
+          type: 'location', id: locationId, columns: [L.goodBin]
+        });
+        return textOf(v[L.goodBin]);
+      } catch (e) { return ''; }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // The bin / lot map — C.LINE.binMap
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * BUILD THE LINE'S MAP. Returns a JSON string, or '' when there is
+     * nothing worth storing. THROWS BIN_MAP_TOO_LARGE.
+     *
+     * ── WHY IT IS NOT JUST A LIST ─────────────────────────────────────────
+     *
+     * The field is declared at 4000 characters and a serialized line can
+     * carry hundreds of rows. One entry per row would blow the cap on an
+     * ordinary pallet of serials, all of them saying the same two bins.
+     *
+     * So the line's OWN bins go in once, as `h` and `g`, and only a row
+     * that DIFFERS from them earns an entry in `l`. A line with one hold
+     * bin and one good bin is twenty-three characters whatever its lot
+     * count, and the common case costs nothing:
+     *
+     *   {"v":1,"h":936,"g":940}
+     *
+     * ── AND WHEN IT STILL WILL NOT FIT ────────────────────────────────────
+     *
+     * It is refused, not trimmed. Dropping an override silently is a lot
+     * released into a bin nobody chose, discovered weeks later by a
+     * reconciliation. A loud refusal names the line and the operator splits
+     * it.
+     *
+     * HOLD overrides are dropped FIRST if dropping buys the fit, because a
+     * hold bin is also written to the inventory detail and can be read back
+     * from there. A GOOD bin exists nowhere else and is never dropped.
+     */
+    const binMapJson = (rows, holds, goods, lineKey) => {
+      // The modes: the bin the most rows agree on. A line with no rows at
+      // all still records the line-level pair, because a non-tracked item
+      // has a bin too.
+      const mode = (list) => {
+        const n = {};
+        let best = '', bestN = 0;
+        list.forEach((v) => {
+          const k = String(v || '');
+          if (!k) return;
+          n[k] = (n[k] || 0) + 1;
+          if (n[k] > bestN) { bestN = n[k]; best = k; }
+        });
+        return best;
+      };
+      const h = mode(holds);
+      const g = mode(goods);
+      if (!h && !g) return '';
+
+      const num = (v) => {
+        const s = String(v || '');
+        return /^[0-9]+$/.test(s) ? Number(s) : s;
+      };
+      const base = { v: C.BIN_MAP.VERSION };
+      if (h) base.h = num(h);
+      if (g) base.g = num(g);
+
+      // ══ THE EXCEPTIONS, PER LOT AND PER QUANTITY ══════════════════════
+      //
+      // v1 kept one pair per lot name. That cannot describe the receipt
+      // where 10 of LOT-B went to the cold good bin and 4 to the ambient
+      // one: same name, two destinations, and nothing in the key to tell
+      // the release which is which. The quantity is what tells them apart,
+      // so it goes in the value.
+      //
+      // AND IF A LOT HAS ONE ODD ROW, EVERY ROW OF THAT LOT IS LISTED.
+      // Recording only the row that differs would leave the release
+      // holding one entry for a lot that was split, and "one entry" is
+      // read as "this is the whole story" - which is how a release ends up
+      // confidently putting 4 units in the bin that was meant for 10.
+      const byLot = {};
+      const lotOrder = [];
+      for (let i = 0; i < rows.length; i++) {
+        const d = rows[i];
+        const name = String((d && (d.serial || d.lot)) || '').trim();
+        if (!name) continue;                    // cannot be addressed later
+        const k = name.toUpperCase();
+        if (!byLot[k]) { byLot[k] = []; lotOrder.push(k); }
+        byLot[k].push({
+          q: Number(d.quantity === undefined ? 1 : d.quantity) || 0,
+          h: String(holds[i] || ''), g: String(goods[i] || '')
+        });
+      }
+      const over = [];
+      lotOrder.forEach((k) => {
+        const list = byLot[k];
+        const odd = list.filter((e) => e.h !== h || e.g !== g).length;
+        if (!odd) return;
+        over.push({ name: k, rows: list });
+      });
+      if (!over.length) return JSON.stringify(base);
+
+      // `l` LAST, so the stored value reads v, h, g, then the exceptions -
+      // which is the order a person scanning the field on the form wants.
+      const build = (list, withHold) => {
+        const o = {};
+        Object.keys(base).forEach((k) => { o[k] = base[k]; });
+        o.l = {};
+        list.forEach((e) => {
+          o.l[e.name] = e.rows.map((x) => [
+            x.q,
+            withHold && x.h !== h ? num(x.h) : 0,
+            x.g !== g ? num(x.g) : 0
+          ]);
+        });
+        return JSON.stringify(o);
+      };
+
+      let out = build(over, true);
+      if (out.length <= C.BIN_MAP.MAX) return out;
+
+      // Too long. Drop the hold overrides - recoverable from the inventory
+      // detail - and keep every good bin.
+      const goodOnly = over.filter(
+        (e) => e.rows.filter((x) => x.g !== g).length);
+      out = build(goodOnly, false);
+      if (out.length <= C.BIN_MAP.MAX) {
+        log.audit({
+          title: 'RB inbound - bin map trimmed to its good bins',
+          details: {
+            line: lineKey, lots: over.length, kept: goodOnly.length,
+            effect: 'The per-lot HOLD bins did not fit and were dropped. ' +
+              'They are on the inventory detail of this line and can be ' +
+              'read back from there. No good bin was dropped.'
+          }
+        });
+        return out;
+      }
+
+      throw err(C.LINE_ERR.BIN_MAP_TOO_LARGE,
+        'Line ' + lineKey + ' splits ' + goodOnly.length + ' lot(s) across ' +
+        'good bins, and the bin/lot map that records them is ' + out.length +
+        ' characters against a limit of ' + C.BIN_MAP.MAX + '. The map is ' +
+        'NOT truncated: a dropped entry is a lot that would later release ' +
+        'into a bin nobody chose. Send one good bin for the whole line, or ' +
+        'split the line across several so each map fits.');
+    };
+
+    /**
+     * READ A STORED MAP back. Never throws - a line written before this
+     * field existed, or by hand, simply has no map and the release falls
+     * through to the location's bins.
+     *
+     * Returns { h, g, l: { LOTNAME: [{ q, h, g }] } }. BOTH VERSIONS parse:
+     * a v1 value is a bare `[hold, good]` pair, read as one entry of
+     * quantity 0, which means "any quantity" and is exactly how v1 behaved.
+     */
+    const parseBinMap = (raw) => {
+      const out = { h: '', g: '', l: {} };
+      const text = String(raw || '').trim();
+      if (!text) return out;
+      let p = null;
+      try { p = JSON.parse(text); } catch (e) { p = null; }
+      if (!p || typeof p !== 'object') {
+        log.audit({
+          title: 'RB release - a bin/lot map is not valid JSON',
+          details: {
+            raw: text.substring(0, 300),
+            effect: 'Ignored. The release falls back to the payload and ' +
+              'then to the location\'s Good Bin, which is what a receipt ' +
+              'written before this field did anyway.'
+          }
+        });
+        return out;
+      }
+      out.h = p.h === undefined || p.h === null ? '' : String(p.h);
+      out.g = p.g === undefined || p.g === null ? '' : String(p.g);
+      const l = (p.l && typeof p.l === 'object') ? p.l : {};
+      // 0 in any slot is the sentinel for "the line's own", not a bin id
+      // and not a real quantity.
+      const entry = (t) => ({
+        q: Number(t[0]) || 0,
+        h: t[1] ? String(t[1]) : out.h,
+        g: t[2] ? String(t[2]) : out.g
+      });
+      Object.keys(l).forEach((k) => {
+        const v = l[k];
+        if (!Array.isArray(v) || !v.length) return;
+        const key = String(k).toUpperCase();
+        out.l[key] = Array.isArray(v[0])
+          ? v.map(entry)                          // v2: [[q,h,g], ...]
+          : [entry([0, v[0], v[1]])];             // v1: [h,g]
+      });
+      return out;
+    };
+
+    /** Every entry for one lot. The line's own, as one entry, when unlisted. */
+    const binMapFor = (map, lotName) => {
+      if (!map) return [];
+      const k = String(lotName || '').trim().toUpperCase();
+      if (k && map.l[k]) return map.l[k];
+      if (!map.h && !map.g) return [];
+      return [{ q: 0, h: map.h, g: map.g }];
+    };
+
+    /**
+     * WHICH ENTRY A RELEASE OF `qty` IS ALLOWED TO USE.
+     *
+     * The entries are what the RECEIPT recorded. The fourth number on each
+     * is how much of it a previous release already spent, so a lot split
+     * 10/4 across two bins cannot have the same 10 released twice.
+     *
+     * The rules, in order, and they refuse rather than guess:
+     *
+     *   nothing recorded      -> no answer, the ladder goes on to the
+     *                            location
+     *   one entry left        -> that one, whatever the quantity. A lot
+     *                            that was never split has one destination
+     *                            and the quantity adds nothing
+     *   an EXACT match on an  -> that one. This is the split case working
+     *   entry's own quantity     as intended: ask for 10 and get the bin
+     *                            the 10 went to
+     *   every remaining entry -> that bin. The lot was split by quantity
+     *   agrees on the good bin   but not by destination, so there is
+     *                            nothing to be ambiguous about
+     *   otherwise             -> NO ANSWER, and the caller refuses. The
+     *                            receipt says 10 went one way and 4 the
+     *                            other; a release of 7 cannot be
+     *                            attributed to either, and putting
+     *                            regulated stock in a guessed bin is the
+     *                            failure this whole field exists to stop
+     */
+    const entryForRelease = (row, qty) => {
+      const list = (row && Array.isArray(row.b)) ? row.b : null;
+      if (!list || !list.length) {
+        if (row && (row.h || row.g)) return { i: -1, h: row.h || '', g: row.g || '' };
+        return null;
+      }
+      const left = [];
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        const q = Number(t[0]) || 0;
+        const done = Number(t[3]) || 0;
+        if (q && done >= q) continue;                 // spent
+        left.push({
+          i: i, q: q, h: String(t[1] || ''), g: String(t[2] || ''),
+          remaining: q ? q - done : 0
+        });
+      }
+      if (!left.length) return null;
+      if (left.length === 1)
+        return { i: left[0].i, h: left[0].h, g: left[0].g };
+      const exact = left.filter((e) => e.remaining === Number(qty))[0];
+      if (exact) return { i: exact.i, h: exact.h, g: exact.g };
+      const goods = [];
+      left.forEach((e) => { if (goods.indexOf(e.g) === -1) goods.push(e.g); });
+      if (goods.length === 1)
+        return { i: left[0].i, h: left[0].h, g: goods[0] };
+      return { ambiguous: left.map((e) => e.remaining + ' -> ' + e.g) };
+    };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Small writers
