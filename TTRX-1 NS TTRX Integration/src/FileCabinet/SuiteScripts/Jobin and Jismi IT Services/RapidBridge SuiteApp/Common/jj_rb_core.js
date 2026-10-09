@@ -870,7 +870,7 @@ define(['N/search', 'N/record'],
       //
       // SHAPE - short keys, because this is stored on every receipt:
       //
-      //   { "v": 1, "receipt": "2481003", "seq": 3,
+      //   { "receipt": "2481003", "seq": 3,
       //     "updated": "2026-10-05T10:11:12.000Z",
       //     "lots": {
       //       "718|901": { "item":"718", "lot":"LOT-2026-0815", "lotId":"901",
@@ -914,7 +914,6 @@ define(['N/search', 'N/record'],
      * that later reads the field has to agree.
      */
     const RELEASE_LEDGER = Object.freeze({
-      VERSION: 1,
       // How many individual calls are kept in `calls`. The cumulative figures
       // in `lots` are never trimmed, so trimming history costs traceability
       // in the Sync Log's direction - where the full record already lives -
@@ -980,8 +979,8 @@ define(['N/search', 'N/record'],
       //    only lots that differ are listed, so the ordinary line is about
       //    twenty characters whatever its lot count:
       //
-      //      {"v":1,"h":936,"g":940}
-      //      {"v":1,"h":936,"g":940,"l":{"LOT-B":[937,941]}}
+      //      {"h":936,"g":940}
+      //      {"h":936,"g":940,"l":{"LOT-B":[[10,0,941],[4,0,942]]}}
       //
       //    Keyed on the lot NAME, upper-cased, because at the moment the
       //    line is written the lot may not exist in NetSuite yet - the
@@ -1015,19 +1014,6 @@ define(['N/search', 'N/record'],
      * into the wrong bin, which is the failure this field exists to stop.
      */
     const BIN_MAP = Object.freeze({
-      // ── v2 ADDED THE QUANTITY ────────────────────────────────────────
-      // v1 keyed each exception on the lot name alone: `"L2":[hold,good]`.
-      // That cannot describe the receipt where 10 of LOT-B went to the
-      // cold good bin and 4 of it to the ambient one - the same lot, two
-      // destinations, and nothing in the key to tell them apart.
-      //
-      // v2 makes the value a LIST OF TRIPLES, `[quantity, hold, good]`:
-      //
-      //   {"v":2,"h":936,"g":940,"l":{"L2":[[10,0,941],[4,0,942]]}}
-      //
-      // A quantity of 0 means "any quantity" and is what a v1 map is read
-      // as, so a receipt written before this still releases.
-      VERSION: 2,
       MAX: 4000
     });
 
@@ -1601,11 +1587,17 @@ define(['N/search', 'N/record'],
       return str.length <= n ? str : str.substring(0, n - 3) + '...';
     };
 
-    const safeJson = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+    const safeJson = (s) => {
+      try { return JSON.parse(s); } catch (e) {
+        log.error({ title: 'RB-CORE-001 safeJson', details: (e && e.message) || String(e) }); return null;
+      }
+    };
 
     const isoUtc = (d) => {
       try { return (d instanceof Date ? d : new Date(d)).toISOString(); }
-      catch (e) { return ''; }
+      catch (e) {
+        log.error({ title: 'RB-CORE-002 isoUtc', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     /** NetSuite hands checkbox values back as boolean, 'T'/'F' or 'true'/'false'. */
@@ -1630,7 +1622,9 @@ define(['N/search', 'N/record'],
         const f = fields[i];
         let a, b;
         try { a = oldRec.getValue({ fieldId: f }); b = newRec.getValue({ fieldId: f }); }
-        catch (e) { continue; }
+        catch (e) {
+          log.error({ title: 'RB-CORE-003 onlySyncFieldsChanged', details: (e && e.message) || String(e) }); continue;
+        }
         if (String(a) === String(b)) continue;
         if (!seen[f]) return false;        // something of THEIRS changed
         changed++;
@@ -1693,6 +1687,7 @@ define(['N/search', 'N/record'],
         // of the six beside it.
         try { rec.setValue({ fieldId: f, value: values[f] }); }
         catch (e) {
+          log.error({ title: 'RB-CORE-004 writeFields', details: (e && e.message) || String(e) });
           log.audit({
             title: 'RB writeFields - ' + type + '.' + f + ' would not set',
             details: (e && e.message) || String(e)
@@ -1738,16 +1733,13 @@ define(['N/search', 'N/record'],
             return true;
           });
         } catch (e) {
-          log.error({ title: 'RB listId — list unreadable: ' + listScriptId, details: e });
+          log.error({ title: 'RB-CORE-005 listId', details: { context: 'RB listId — list unreadable: ' + listScriptId, error: e } });
         }
         LIST_CACHE[listScriptId] = map;
       }
       const id = LIST_CACHE[listScriptId][String(value).toLowerCase()];
       if (id === undefined) {
-        log.error({
-          title: 'RB listId — value not found',
-          details: listScriptId + ' has no value "' + value + '"'
-        });
+        log.error({ title: 'RB-CORE-006 listId', details: listScriptId + ' has no value "' + value + '"' });
         return null;
       }
       return id;
@@ -1792,17 +1784,11 @@ define(['N/search', 'N/record'],
       let src = null;
       try { src = JSON.parse(String(raw)); }
       catch (e) {
-        log.error({
-          title: 'RB Pack Size Type Map is not valid JSON',
-          details: (e && e.message) || String(e)
-        });
+        log.error({ title: 'RB-CORE-007 parsePackSizeMap', details: (e && e.message) || String(e) });
         return out;
       }
       if (!src || typeof src !== 'object' || Array.isArray(src)) {
-        log.error({
-          title: 'RB Pack Size Type Map must be a JSON object',
-          details: 'Expected {"Each":"1","Case":"5"}; got ' + String(raw).slice(0, 120)
-        });
+        log.error({ title: 'RB-CORE-008 parsePackSizeMap', details: 'Expected {"Each":"1","Case":"5"}; got ' + String(raw).slice(0, 120) });
         return out;
       }
       Object.keys(src).forEach((k) => {
@@ -1812,9 +1798,10 @@ define(['N/search', 'N/record'],
         // size type id, which is worse than having no mapping at all.
         if (v === null || v === undefined || typeof v === 'object') {
           log.error({
-            title: 'RB Pack Size Type Map value ignored for "' + k + '"',
-            details: 'Expected a number or a string; got ' +
-              (v === null ? 'null' : typeof v) + '.'
+            title: 'RB-CORE-009 parsePackSizeMap', details: {
+              context: 'RB Pack Size Type Map value ignored for "' + k + '"', error: 'Expected a number or a string; got ' +
+                (v === null ? 'null' : typeof v) + '.'
+            }
           });
           return;
         }
@@ -1886,7 +1873,7 @@ define(['N/search', 'N/record'],
           CFG_CACHE = row;
         });
       } catch (e) {
-        log.error({ title: 'RB config.get', details: e });
+        log.error({ title: 'RB-CORE-010 get', details: e });
         CFG_CACHE = null;
       }
       return CFG_CACHE;
@@ -1973,7 +1960,7 @@ define(['N/search', 'N/record'],
           return true;
         });
       } catch (e) {
-        log.error({ title: 'RB unitTypesForItems', details: e });
+        log.error({ title: 'RB-CORE-011 unitTypesForItems', details: e });
       }
       return out;
     };
@@ -2034,6 +2021,7 @@ define(['N/search', 'N/record'],
         try {
           rec = record.load({ type: 'unitstype', id: tid, isDynamic: false });
         } catch (e) {
+          log.error({ title: 'RB-CORE-012 loadUnits', details: (e && e.message) || String(e) });
           // No Multiple Units of Measure feature, or the type was deleted.
           log.audit({
             title: 'RB loadUnits — Units Type ' + tid + ' could not be loaded',
@@ -2046,12 +2034,16 @@ define(['N/search', 'N/record'],
         byTypeList[tid] = byTypeList[tid] || [];
 
         let n = 0;
-        try { n = rec.getLineCount({ sublistId: 'uom' }); } catch (e) { n = 0; }
+        try { n = rec.getLineCount({ sublistId: 'uom' }); } catch (e) {
+          log.error({ title: 'RB-CORE-013 loadUnits', details: (e && e.message) || String(e) }); n = 0;
+        }
 
         for (let i = 0; i < n; i++) {
           const g = (f) => {
             try { return rec.getSublistValue({ sublistId: 'uom', fieldId: f, line: i }); }
-            catch (e) { return ''; }
+            catch (e) {
+              log.error({ title: 'RB-CORE-014 g', details: (e && e.message) || String(e) }); return '';
+            }
           };
           const name = String(g('unitname') || '');
           if (!name) continue;

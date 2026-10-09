@@ -21,8 +21,8 @@
  *
  * §7.12.
  */
-define(['N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
-  (search, core, io, sync) => {
+define(['N/record', 'N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_rb_sync'],
+  (record, search, core, io, sync) => {
 
     const { C, util, config } = core;
     const { logIo } = io;
@@ -74,6 +74,7 @@ define(['N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
         });
 
       } catch (e) {
+        log.error({ title: 'RB-RESYNC-001 each', details: (e && e.message) || String(e) });
         // A Mass Update must not abandon the remaining rows because one failed.
         logIo.exception(entry, { type: recordType, id: recordId }, e);
       }
@@ -89,12 +90,16 @@ define(['N/search', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj_
           filters: [[U.item, 'anyof', itemId], 'AND', ['isinactive', 'is', 'F']],
           columns: ['internalid']
         }).run().each((r) => { ids.push(r.getValue('internalid')); return true; });
-      } catch (e) { return; }
+      } catch (e) {
+        log.error({ title: 'RB-RESYNC-002 clearItemPayloads', details: (e && e.message) || String(e) }); return;
+      }
 
       ids.forEach((id) => {
         try {
           util.writeFields(C.REC.UOM, id, { [U.payload]: '' });
-        } catch (e) { /* the engine will still evaluate it */ }
+        } catch (e) {
+          log.error({ title: 'RB-RESYNC-003 clearItemPayloads', details: (e && e.message) || String(e) }); /* the engine will still evaluate it */
+        }
       });
     };
 

@@ -108,7 +108,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
 
       let count = 0;
       try { count = newRecord.getLineCount({ sublistId: 'item' }); }
-      catch (e) { return out; }
+      catch (e) {
+        log.error({ title: 'RB-TXN-001 classifyLines', details: (e && e.message) || String(e) }); return out;
+      }
       if (count <= 0) return out;
 
       // Pass 1 — the distinct items on the order.
@@ -119,7 +121,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         let id = '';
         try {
           id = newRecord.getSublistValue({ sublistId: 'item', fieldId: 'item', line: i });
-        } catch (e) { id = ''; }
+        } catch (e) {
+          log.error({ title: 'RB-TXN-002 classifyLines', details: (e && e.message) || String(e) }); id = '';
+        }
         id = String(id || '');
         lineItem.push(id);
         if (!id || seen[id]) continue;
@@ -156,9 +160,8 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         // classified" rather than "not eligible": saying nothing is better
         // than marking a regulated order as containing no regulated lines.
         log.error({
-          title: 'RB txn eligibility field could not be read: ' + eligField,
-          details: {
-            recordType: newRecord.type, recordId: newRecord.id || null,
+          title: 'RB-TXN-003 classifyLines', details: {
+            context: 'RB txn eligibility field could not be read: ' + eligField, recordType: newRecord.type, recordId: newRecord.id || null,
             error: (e && e.message) || String(e),
             note: 'Check the Eligibility Field setting on the RapidBridge ' +
               'Configuration. No line was classified on this save.'
@@ -204,7 +207,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
     const setBody = (rec, fieldId, value) => {
       if (!fieldId) return;
       try { rec.setValue({ fieldId: fieldId, value: value }); }
-      catch (e) { /* not on this form */ }
+      catch (e) {
+        log.error({ title: 'RB-TXN-004 setBody', details: (e && e.message) || String(e) }); /* not on this form */
+      }
     };
 
     const setLine = (rec, line, fieldId, value) => {
@@ -213,7 +218,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         rec.setSublistValue({
           sublistId: 'item', fieldId: fieldId, line: line, value: value
         });
-      } catch (e) { /* the column is not on this form */ }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-005 setLine', details: (e && e.message) || String(e) }); /* the column is not on this form */
+      }
     };
 
     const lineQty = (rec, line) => {
@@ -221,7 +228,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         return Number(rec.getSublistValue({
           sublistId: 'item', fieldId: 'quantity', line: line
         })) || 0;
-      } catch (e) { return 0; }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-006 lineQty', details: (e && e.message) || String(e) }); return 0;
+      }
     };
 
     /**
@@ -238,10 +247,14 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       try {
         const v = rec.getSublistValue({ sublistId: 'item', fieldId: 'units', line: line });
         if (v) return String(v);
-      } catch (e) { /* not on this form */ }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-007 lineUnit', details: (e && e.message) || String(e) }); /* not on this form */
+      }
       try {
         return rec.getSublistText({ sublistId: 'item', fieldId: 'units', line: line }) || '';
-      } catch (e) { return ''; }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-008 lineUnit', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     const lineClosed = (rec, line) => {
@@ -249,7 +262,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         return util.truthy(rec.getSublistValue({
           sublistId: 'item', fieldId: 'isclosed', line: line
         }));
-      } catch (e) { return false; }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-009 lineClosed', details: (e && e.message) || String(e) }); return false;
+      }
     };
 
     /**
@@ -298,7 +313,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           return true;
         });
       } catch (e) {
-        log.error('Error @ txn productMap', e);
+        log.error({ title: 'RB-TXN-010 productMap', details: { error: (e && e.message) || String(e) } });
       }
       return map;
     };
@@ -461,14 +476,20 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           });
           const raw = textOf(v.status) || labelOf(v.status);
           if (raw) { STATUS_CACHE[key] = raw; return raw; }
-        } catch (e) { /* fall through to the in-memory value */ }
+        } catch (e) {
+          log.error({ title: 'RB-TXN-011 statusOf', details: (e && e.message) || String(e) }); /* fall through to the in-memory value */
+        }
       }
       try {
         const val = rec.getValue({ fieldId: 'status' });
         if (val) return val;
-      } catch (e) { /* not every type exposes it this way */ }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-012 statusOf', details: (e && e.message) || String(e) }); /* not every type exposes it this way */
+      }
       try { return rec.getText({ fieldId: 'status' }) || ''; }
-      catch (e) { return ''; }
+      catch (e) {
+        log.error({ title: 'RB-TXN-013 statusOf', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -501,7 +522,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       try {
         return search.lookupFields({ type: recordType, id: recordId, columns: cols });
       } catch (e) {
-        log.error('Error @ txn readHeader ' + recordType + '/' + recordId, e);
+        log.error({ title: 'RB-TXN-014 readHeader', details: { context: 'Error @ txn readHeader ' + recordType + '/' + recordId, error: (e && e.message) || String(e) } });
         return null;
       }
     };
@@ -542,6 +563,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           return false;
         });
       } catch (e) {
+        log.error({ title: 'RB-TXN-015 orderAddressUuids', details: (e && e.message) || String(e) });
         // Not fatal. An account that has never deployed the address custom
         // field, or a transaction type with no address join, lands here and
         // the entity defaults answer instead.
@@ -600,7 +622,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           return true;
         });
       } catch (e) {
-        log.error('Error @ txn readLines ' + recordType + '/' + recordId, e);
+        log.error({ title: 'RB-TXN-016 readLines', details: { context: 'Error @ txn readLines ' + recordType + '/' + recordId, error: (e && e.message) || String(e) } });
       }
       return rows;
     };
@@ -741,7 +763,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           return true;
         });
       } catch (e) {
-        log.error('Error @ txn presyncItems recordtype', e);
+        log.error({ title: 'RB-TXN-017 presyncItems', details: { error: (e && e.message) || String(e) } });
         return false;
       }
 
@@ -769,7 +791,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           });
           pushed = true;
         } catch (e) {
-          log.error('Error @ txn pre-sync item ' + nameOf(id) + ' [' + t + ']', e);
+          log.error({ title: 'RB-TXN-018 presyncItems', details: { context: 'Error @ txn pre-sync item ' + nameOf(id) + ' [' + t + ']', error: (e && e.message) || String(e) } });
         }
       });
       return pushed;
@@ -822,7 +844,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           recordType: entityType, recordId: entityId
         }) || [];
       } catch (e) {
-        log.error('Error @ txn partnerAddresses ' + entityType + '/' + entityId, e);
+        log.error({ title: 'RB-TXN-019 partnerAddresses', details: { context: 'Error @ txn partnerAddresses ' + entityType + '/' + entityId, error: (e && e.message) || String(e) } });
         return out;
       }
 
@@ -877,7 +899,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         for (let i = 0; i < addrs.length; i++)
           if (!util.blank(addrs[i].uuid)) return String(addrs[i].uuid);
       } catch (e) {
-        log.error('Error @ txn locationAddressUuid ' + locationId, e);
+        log.error({ title: 'RB-TXN-020 locationAddressUuid', details: { context: 'Error @ txn locationAddressUuid ' + locationId, error: (e && e.message) || String(e) } });
       }
       return '';
     };
@@ -1237,7 +1259,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
         try {
           util.writeFields(recordType, recordId, { [unit.uuidField]: prior.uuid }, { ignoreMandatoryFields: true });
         } catch (e) {
-          log.error({ title: 'RB txn could not write adopted UUID', details: e });
+          log.error({ title: 'RB-TXN-021 run', details: e });
         }
       }
 
@@ -1402,7 +1424,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (unit.syncedField) values[unit.syncedField] = false;
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
-      } catch (e) { log.error('Error @ txn clearRemoteIdentity', e); }
+      } catch (e) { log.error({ title: 'RB-TXN-022 clearRemoteIdentity', details: { error: (e && e.message) || String(e) } }); }
       unit.storedUuid = '';
       unit.storedPayload = '';
       unit.storedSynced = false;
@@ -1481,7 +1503,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (!v) return '';
       let d = null;
       try { d = format.parse({ value: v, type: format.Type.DATE }); }
-      catch (e) { d = null; }
+      catch (e) {
+        log.error({ title: 'RB-TXN-023 isoDate', details: (e && e.message) || String(e) }); d = null;
+      }
       if (!d || isNaN(d.getTime())) {
         const fallback = new Date(v);
         if (isNaN(fallback.getTime())) return v;   // already in some agreed form
@@ -1495,7 +1519,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (!logId) return;
       try {
         util.writeFields(C.REC.LOG, logId, { [C.LOG.lineTotal]: total, [C.LOG.lineSent]: sent }, { ignoreMandatoryFields: true });
-      } catch (e) { /* a decoration; never worth failing the call over */ }
+      } catch (e) {
+        log.error({ title: 'RB-TXN-024 stampLineCounts', details: (e && e.message) || String(e) }); /* a decoration; never worth failing the call over */
+      }
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1729,7 +1755,7 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       if (unit.payloadField) values[unit.payloadField] = '';
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
-      } catch (e) { log.error('Error @ txn stampVoided', e); }
+      } catch (e) { log.error({ title: 'RB-TXN-025 stampVoided', details: { error: (e && e.message) || String(e) } }); }
       logIo.stampTry(unit, C.TRY.SYNCED, null,
         'The destination transaction was voided because this order was closed. ' +
         'The identifier is kept so the audit trail shows what was removed.');
@@ -1809,7 +1835,9 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
       const f = entry.fields;
       let uuid = '';
       try { uuid = String(oldRecord.getValue({ fieldId: f.uuid }) || ''); }
-      catch (e) { uuid = ''; }
+      catch (e) {
+        log.error({ title: 'RB-TXN-026 runDelete', details: (e && e.message) || String(e) }); uuid = '';
+      }
 
       if (!uuid) {
         log.audit({
@@ -1862,12 +1890,16 @@ define(['N/record', 'N/search', 'N/format', './jj_rb_core', './jj_rb_io', './jj_
           if (!fid) return;
           const off = (k === 'synced' || k === 'allSerial' || k === 'containsNonSerial');
           try { newRecord.setValue({ fieldId: fid, value: off ? false : '' }); }
-          catch (e) { /* not on the form */ }
+          catch (e) {
+            log.error({ title: 'RB-TXN-027 clearAllSyncFields', details: (e && e.message) || String(e) }); /* not on the form */
+          }
         });
 
       const L = entry.lineFields || C.LINE;
       let n = 0;
-      try { n = newRecord.getLineCount({ sublistId: 'item' }); } catch (e) { n = 0; }
+      try { n = newRecord.getLineCount({ sublistId: 'item' }); } catch (e) {
+        log.error({ title: 'RB-TXN-028 clearAllSyncFields', details: (e && e.message) || String(e) }); n = 0;
+      }
       for (let i = 0; i < n; i++) {
         setLine(newRecord, i, L.productUuid, '');
         setLine(newRecord, i, L.qtySynced, '');

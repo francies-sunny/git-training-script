@@ -304,6 +304,7 @@ define(['N/record', 'N/search', 'N/runtime',
       try {
         if (typeof raw === 'string') params = raw ? JSON.parse(raw) : {};
       } catch (e) {
+        log.error({ title: 'RB-READ-001 dispatch', details: (e && e.message) || String(e) });
         return failEnvelope(C.READ_ERR.MALFORMED_PAYLOAD,
           'The request body is not valid JSON.');
       }
@@ -341,6 +342,7 @@ define(['N/record', 'N/search', 'N/runtime',
         try {
           out = okEnvelope(HANDLERS[read.fn](params, cfg));
         } catch (e) {
+          log.error({ title: 'RB-READ-002 dispatch', details: (e && e.message) || String(e) });
           if (e && e.rbRefusal) {
             // ── IS THIS REFUSAL WORTH A SYNC LOG ROW? ─────────────────────
             //
@@ -417,7 +419,7 @@ define(['N/record', 'N/search', 'N/runtime',
       } catch (e) {
         // A RESTlet that throws answers with a NetSuite error envelope the
         // Middleware cannot branch on. Everything comes back as OUR envelope.
-        log.error({ title: 'RB read unhandled ' + operation, details: e });
+        log.error({ title: 'RB-READ-003 dispatch', details: { context: 'RB read unhandled ' + operation, error: e } });
         return failEnvelope(C.READ_ERR.SEARCH_FAILED,
           (e && e.message) ? e.message : String(e));
       }
@@ -529,7 +531,7 @@ define(['N/record', 'N/search', 'N/runtime',
         });
       } catch (e) {
         // Losing the log row must not lose the answer.
-        log.error({ title: 'RB read log', details: e });
+        log.error({ title: 'RB-READ-004 recordRead', details: e });
       }
     };
 
@@ -562,7 +564,7 @@ define(['N/record', 'N/search', 'N/runtime',
           columns: ['internalid']
         }).run().each(() => { found = true; return false; });
       } catch (e) {
-        log.error({ title: 'RB read alreadyOpen', details: e });
+        log.error({ title: 'RB-READ-005 alreadyOpen', details: e });
         return false;
       }
       return found;
@@ -670,7 +672,9 @@ define(['N/record', 'N/search', 'N/runtime',
         const u = runtime.getCurrentUser();
         const loc = u && u.location ? String(u.location) : '';
         if (loc && loc !== '0') return { id: loc, source: 'current_user' };
-      } catch (e) { /* no user context */ }
+      } catch (e) {
+        log.error({ title: 'RB-READ-006 locationFilter', details: (e && e.message) || String(e) }); /* no user context */
+      }
       return { id: '', source: 'none' };
     };
 
@@ -801,6 +805,7 @@ define(['N/record', 'N/search', 'N/runtime',
           ]
         }).run().getRange({ start: start, end: start + size });
       } catch (e) {
+        log.error({ title: 'RB-READ-007 listTransactions', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.SEARCH_FAILED,
           'The transaction list could not be read: ' +
           ((e && e.message) || String(e)));
@@ -908,6 +913,7 @@ define(['N/record', 'N/search', 'N/runtime',
             'subsidiary', 'memo', C.TXN.uuid, C.TXN.shipmentUuid]
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-008 fetchTransaction', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.TRANSACTION_NOT_FOUND,
           'No ' + s.recordType + ' with internal id ' + orderId + ' exists.');
       }
@@ -929,7 +935,7 @@ define(['N/record', 'N/search', 'N/runtime',
           util.scannableStatusNames(s.recordType).join(', ') +
           (statusRow && statusRow.sync
             ? '. It is still synchronized with TrackTraceRX; it simply has ' +
-              'nothing left to receive or fulfil.'
+            'nothing left to receive or fulfil.'
             : '.'));
 
       const txnUuid = textOf(head[C.TXN.uuid]);
@@ -947,6 +953,7 @@ define(['N/record', 'N/search', 'N/runtime',
           toType: s.toType, isDynamic: false
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-009 fetchTransaction', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.TRANSACTION_NOT_SCANNABLE,
           'Order ' + named(tranid, orderId) + ' has nothing left to scan: ' +
           ((e && e.message) || String(e)));
@@ -959,11 +966,15 @@ define(['N/record', 'N/search', 'N/runtime',
       for (let i = 0; i < count; i++) {
         const sv = (f) => {
           try { return rec.getSublistValue({ sublistId: 'item', fieldId: f, line: i }); }
-          catch (e) { return ''; }
+          catch (e) {
+            log.error({ title: 'RB-READ-010 sv', details: (e && e.message) || String(e) }); return '';
+          }
         };
         const st = (f) => {
           try { return rec.getSublistText({ sublistId: 'item', fieldId: f, line: i }); }
-          catch (e) { return ''; }
+          catch (e) {
+            log.error({ title: 'RB-READ-011 st', details: (e && e.message) || String(e) }); return '';
+          }
         };
         const itemId = String(sv('item') || '');
         if (!itemId) continue;                  // description / subtotal line
@@ -1184,10 +1195,11 @@ define(['N/record', 'N/search', 'N/runtime',
         search.create({
           type: s.recordType,
           filters: [['mainline', 'is', 'T'], 'AND',
-            (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
+          (uuid ? [C.TXN.uuid, 'is', uuid] : ['tranid', 'is', tranid])],
           columns: ['internalid']
         }).run().each((r) => { hit = String(r.id); return false; });
       } catch (e) {
+        log.error({ title: 'RB-READ-012 resolveTransactionId', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.SEARCH_FAILED,
           'The transaction could not be looked up: ' + ((e && e.message) || String(e)));
       }
@@ -1240,7 +1252,7 @@ define(['N/record', 'N/search', 'N/runtime',
         // matches nothing, so an item with perfectly good allowed bins comes
         // back with none and the device is told it cannot scan.
         const filters = [['internalid', 'anyof', itemId], 'AND',
-          ['binNumber.inactive', 'is', 'F']];
+        ['binNumber.inactive', 'is', 'F']];
         if (loc) filters.push('AND', ['binNumber.location', 'anyof', loc]);
         search.create({
           type: 'item',
@@ -1264,6 +1276,7 @@ define(['N/record', 'N/search', 'N/runtime',
           return bins.length < C.READ_PAGE.MAX;
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-013 allowedBinsForItem', details: (e && e.message) || String(e) });
         // The Bins sublist is only present when the Bin feature is on. An
         // account that has it off answers with the location's list, which is
         // the documented fallback rather than an error.
@@ -1319,6 +1332,7 @@ define(['N/record', 'N/search', 'N/runtime',
           return out.length < C.READ_PAGE.MAX;
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-014 fulfilmentExceptions', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.SEARCH_FAILED,
           'The fulfilment exception list could not be read: ' +
           ((e && e.message) || String(e)));
@@ -1377,6 +1391,7 @@ define(['N/record', 'N/search', 'N/runtime',
           return bins.length < C.READ_PAGE.MAX;
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-015 binsForLocation', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.SEARCH_FAILED,
           'The bins at location ' + loc + ' could not be read: ' +
           ((e && e.message) || String(e)));
@@ -1492,6 +1507,7 @@ define(['N/record', 'N/search', 'N/runtime',
           type: 'inventorybalance', filters: filters, columns: columns
         }).run().getRange({ start: 0, end: C.READ_PAGE.MAX });
       } catch (e) {
+        log.error({ title: 'RB-READ-016 inventoryRows', details: (e && e.message) || String(e) });
         throw refuseWith(C.READ_ERR.SEARCH_FAILED,
           'Inventory could not be read for location ' + locationId +
           (binId ? ', bin ' + binId : '') + ': ' + ((e && e.message) || String(e)));
@@ -1564,6 +1580,7 @@ define(['N/record', 'N/search', 'N/runtime',
 
       try { run(true); }
       catch (e) {
+        log.error({ title: 'RB-READ-017 readItems', details: (e && e.message) || String(e) });
         // The Eligibility Field is configurable free text, so a typo or a
         // field the account never deployed lands here. NOT fatal — but every
         // line then reads requires_serialization: false, which is a silently
@@ -1620,6 +1637,7 @@ define(['N/record', 'N/search', 'N/runtime',
           return true;
         });
       } catch (e) {
+        log.error({ title: 'RB-READ-018 readUom', details: (e && e.message) || String(e) });
         flag(C.READ_NOTE.DEGRADED_READ,
           'The UOM Detail rows could not be read (' +
           ((e && e.message) || String(e)) + '). Every line is reported with ' +
@@ -1674,9 +1692,9 @@ define(['N/record', 'N/search', 'N/runtime',
           matchedUnit: '',
           reason: Object.keys(rows).length
             ? 'NO_ROW: the item has no UOM Detail row for unit "' +
-              (unitName || C.BASE_UNIT) + '". It has: ' +
-              Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
-              'unit, or correct the Saleable Unit on an existing one.'
+            (unitName || C.BASE_UNIT) + '". It has: ' +
+            Object.keys(rows).join(', ') + '. Add a UOM Detail row for that ' +
+            'unit, or correct the Saleable Unit on an existing one.'
             : 'NO_ROW: the item has no UOM Detail rows at all.'
         };
       }
@@ -1722,7 +1740,9 @@ define(['N/record', 'N/search', 'N/runtime',
         });
         out.hold = textOf(v[L.holdBin]) || fallback;
         out.good = textOf(v[L.goodBin]) || null;
-      } catch (e) { out.hold = fallback; }
+      } catch (e) {
+        log.error({ title: 'RB-READ-019 defaultBins', details: (e && e.message) || String(e) }); out.hold = fallback;
+      }
       return out;
     };
 

@@ -54,7 +54,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
               }
               return true;
             });
-          } catch (e) { return; }
+          } catch (e) {
+            log.error({ title: 'RB-FORMS-001 fieldChanged', details: (e && e.message) || String(e) }); return;
+          }
 
           if (other)
             dialog.alert({
@@ -112,7 +114,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
               if (String(r.getValue('internalid')) !== String(rec.id)) { clash = true; return false; }
               return true;
             });
-          } catch (e) { return; }
+          } catch (e) {
+            log.error({ title: 'RB-FORMS-002 fieldChanged', details: (e && e.message) || String(e) }); return;
+          }
 
           if (clash)
             dialog.alert({
@@ -131,7 +135,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
           const rec = ctx.currentRecord;
           let isChild = false;
           try { isChild = !util.blank(rec.getValue({ fieldId: C.LOG.parent })); }
-          catch (e) { return; }
+          catch (e) {
+            log.error({ title: 'RB-FORMS-003 pageInit', details: (e && e.message) || String(e) }); return;
+          }
           if (!isChild) return;
 
           // C.LOG.success is NOT hidden any more: a child record now carries its
@@ -145,7 +151,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
             try {
               const fld = rec.getField({ fieldId: f });
               if (fld) fld.isDisplay = false;
-            } catch (e) { /* not on this form */ }
+            } catch (e) {
+              log.error({ title: 'RB-FORMS-004 pageInit', details: (e && e.message) || String(e) }); /* not on this form */
+            }
           });
         }
       }
@@ -207,12 +215,16 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
               inactive = util.truthy(rec.getSublistValue({
                 sublistId: UOM_SUBLIST, fieldId: 'isinactive', line: i
               }));
-            } catch (e) { inactive = false; }   // column not on the sublist
+            } catch (e) {
+              log.error({ title: 'RB-FORMS-005 activeUomRows', details: (e && e.message) || String(e) }); inactive = false;
+            }   // column not on the sublist
             if (!inactive) active++;
           }
           return { count: active, source: 'sublist' };
         }
-      } catch (e) { /* the sublist is not on this form */ }
+      } catch (e) {
+        log.error({ title: 'RB-FORMS-006 activeUomRows', details: (e && e.message) || String(e) }); /* the sublist is not on this form */
+      }
 
       // ── no sublist: ask the database, but only when there is an id to ask
       //    about. On create there is none, and that is an ANSWER (zero), not
@@ -230,6 +242,7 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
         }).run().each(() => { rows++; return false; });
         return { count: rows, source: 'search' };
       } catch (e) {
+        log.error({ title: 'RB-FORMS-007 activeUomRows', details: (e && e.message) || String(e) });
         // Cannot tell. Say nothing rather than warn wrongly - beforeSubmit
         // still catches it, and the reconciliation page still lists it.
         console.log('RB client script: UOM Detail count unavailable', e);
@@ -254,7 +267,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
         try {
           eligible = rec.getText({ fieldId: entry.fields.eligible }) ||
             rec.getValue({ fieldId: entry.fields.eligible }) || '';
-        } catch (e) { return true; }
+        } catch (e) {
+          log.error({ title: 'RB-FORMS-008 saveRecord', details: (e && e.message) || String(e) }); return true;
+        }
         const v = String(eligible).toUpperCase();
         if (v !== 'TRUE' && v !== 'T' && v !== 'YES') return true;   // not eligible
 
@@ -268,9 +283,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
           message:
             (isNew
               ? 'This new item is marked eligible for TrackTrace and has no UOM ' +
-                'Detail rows.'
+              'Detail rows.'
               : 'This item is marked eligible for TrackTrace and has no active ' +
-                'UOM Detail rows.') +
+              'UOM Detail rows.') +
             '\n\nEach UOM Detail row is one product in the Middleware, so with ' +
             'none the item cannot sync. It will save, and appear on the ' +
             'reconciliation page as "Item has no UOM Detail".' +
@@ -281,6 +296,7 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
           try {
             rec.save({ enableSourcing: true, ignoreMandatoryFields: false });
           } catch (e) {
+            log.error({ title: 'RB-FORMS-009 saveRecord', details: (e && e.message) || String(e) });
             // Not every form exposes save() from a client script. Say so
             // plainly rather than leave the user on a form that will not go.
             uomWarningAccepted = true;
@@ -305,7 +321,9 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
 
     const jobFor = (rec) => {
       try { return JOBS[String(rec.type).toLowerCase()] || null; }
-      catch (e) { return null; }
+      catch (e) {
+        log.error({ title: 'RB-FORMS-010 jobFor', details: (e && e.message) || String(e) }); return null;
+      }
     };
 
     const run = (entryPoint, ctx) => {
@@ -314,6 +332,7 @@ define(['N/currentRecord', 'N/search', 'N/ui/dialog', '../Common/jj_rb_core'],
         if (!job || !job[entryPoint]) return undefined;
         return job[entryPoint](ctx);
       } catch (e) {
+        log.error({ title: 'RB-FORMS-011 run', details: (e && e.message) || String(e) });
         console.log('RB client script error in ' + entryPoint, e);
         return undefined;                    // advisory only: never block on a bug
       }

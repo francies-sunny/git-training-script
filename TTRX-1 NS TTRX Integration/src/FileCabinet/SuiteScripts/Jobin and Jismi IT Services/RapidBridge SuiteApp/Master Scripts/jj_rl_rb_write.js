@@ -256,6 +256,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       try {
         if (typeof raw === 'string') body = JSON.parse(raw);
       } catch (e) {
+        log.error({ title: 'RB-WRITE-001 dispatch', details: (e && e.message) || String(e) });
         return failEnvelope(C.DOC_ERR.MALFORMED_PAYLOAD,
           'The request body is not valid JSON.');
       }
@@ -308,7 +309,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       } catch (e) {
         // A RESTlet that throws answers with a NetSuite error envelope the
         // Middleware cannot branch on. Everything comes back as OUR envelope.
-        log.error({ title: 'RB inbound unhandled', details: e });
+        log.error({ title: 'RB-WRITE-002 dispatch', details: e });
         return failEnvelope('UNHANDLED',
           (e && e.message) ? e.message : String(e));
       }
@@ -428,6 +429,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           toType: map.recordType, isDynamic: true
         });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-003 createDocument', details: (e && e.message) || String(e) });
         return refuse(C.DOC_ERR.ORDER_CLOSED,
           'Order ' + txn.named(order.tranid, orderId) + ' cannot be ' +
           'transformed into a ' + map.syncType + ': ' +
@@ -437,7 +439,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       // §4.1.2 — THE DUPLICATE GUARD. Set before anything else, so that even a
       // save that fails later has claimed the identifier.
       try { rec.setValue({ fieldId: 'externalid', value: requestUuid }); }
-      catch (e) { /* not settable on this form; the lookup above still guards */ }
+      catch (e) {
+        log.error({ title: 'RB-WRITE-004 createDocument', details: (e && e.message) || String(e) }); /* not settable on this form; the lookup above still guards */
+      }
 
       applyHeader(rec, map, body, cfg, order);
 
@@ -459,7 +463,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         }
         try {
           rec.setValue({ fieldId: 'shipstatus', value: C.IF_STATUS[shipStatusLabel] });
-        } catch (e) { /* not on this form */ }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-005 createDocument', details: (e && e.message) || String(e) }); /* not on this form */
+        }
       }
 
       // ── THE PRE-READ. §17.4 rule 3: everything the line loop needs, in
@@ -512,6 +518,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           applied.push(orderLine);
           rec.commitLine({ sublistId: 'item' });
         } catch (e) {
+          log.error({ title: 'RB-WRITE-006 createDocument', details: (e && e.message) || String(e) });
           failures.push(lineFailure(submitted, e));
           // The line is abandoned rather than committed. Nothing is saved
           // either way, so this only keeps the in-memory record coherent.
@@ -539,6 +546,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       try {
         newId = rec.save({ enableSourcing: true, ignoreMandatoryFields: true });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-007 createDocument', details: (e && e.message) || String(e) });
         // The last document-level gate. Every line validated and the save was
         // still refused — a permission, a plug-in, a locked period.
         const message = (e && e.message) ? e.message : String(e);
@@ -621,7 +629,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       const setIf = (fieldId, value) => {
         if (value === undefined || value === null || value === '') return;
         try { rec.setValue({ fieldId: fieldId, value: value }); }
-        catch (e) { /* not on this form */ }
+        catch (e) {
+          log.error({ title: 'RB-WRITE-008 applyHeader', details: (e && e.message) || String(e) }); /* not on this form */
+        }
       };
       const d = parseDate(body.transaction_date);
       if (d) setIf('trandate', d);
@@ -997,7 +1007,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         sub = rec.getCurrentSublistSubrecord({
           sublistId: 'item', fieldId: 'inventorydetail'
         });
-      } catch (e) { sub = null; }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-009 applyLine', details: (e && e.message) || String(e) }); sub = null;
+      }
       if (!sub) return;                 // the item is not tracked
 
       for (let i = 0; i < detail.length; i++) {
@@ -1146,6 +1158,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           options: { ignoreMandatoryFields: true }
         });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-010 storeIdentifier', details: (e && e.message) || String(e) });
         return refuse(C.DOC_ERR.SAVE_REFUSED,
           'The identifier could not be written: ' +
           ((e && e.message) || String(e)), unit);
@@ -1396,6 +1409,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             locationId: locationId
           }));
         } catch (e) {
+          log.error({ title: 'RB-WRITE-011 releaseInventory', details: (e && e.message) || String(e) });
           failures.push(lineFailure(ln, e));
         }
       });
@@ -1420,6 +1434,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           date: body.transaction_date, memo: body.memo, items: items
         });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-012 releaseInventory', details: (e && e.message) || String(e) });
         const message = (e && e.message) ? e.message : String(e);
         const code = /period/i.test(message)
           ? C.DOC_ERR.PERIOD_LOCKED : C.DOC_ERR.SAVE_REFUSED;
@@ -1530,7 +1545,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           columns: ['internalid']
         }).run().each((r) => { id = String(r.id); return false; });
       } catch (e) {
-        log.error('Error @ release findBinTransfer', e);
+        log.error({ title: 'RB-WRITE-013 findBinTransfer', details: { error: (e && e.message) || String(e) } });
       }
       return id;
     };
@@ -1561,6 +1576,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           columns: [search.createColumn({ name: 'internalid', sort: search.Sort.DESC })]
         }).run().each((r) => { id = String(r.id); return false; });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-014 resolveReceipt', details: (e && e.message) || String(e) });
         log.audit({
           title: 'RB release — receipt could not be found by shipment uuid',
           details: (e && e.message) || String(e)
@@ -1577,7 +1593,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           type: 'itemreceipt', id: receiptId, columns: ['location']
         });
         return textOf(v.location);
-      } catch (e) { return ''; }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-015 receiptLocation', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     /**
@@ -1642,7 +1660,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         });
         locHold = locHold || textOf(lv[L.holdBin]);
         locGood = textOf(lv[L.goodBin]);
-      } catch (e) { /* the fields are not deployed; the config default answers */ }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-016 releaseBins', details: (e && e.message) || String(e) }); /* the fields are not deployed; the config default answers */
+      }
 
       // FROM falls back to the configured Default Bin as well, because that
       // is the same ladder the RECEIPT used to choose where to put it - the
@@ -1702,7 +1722,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           return true;
         });
       } catch (e) {
-        log.error('Error @ release readLotsByName', e);
+        log.error({ title: 'RB-WRITE-017 readLotsByName', details: { error: (e && e.message) || String(e) } });
       }
       return byItem;
     };
@@ -1769,7 +1789,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           return true;
         });
       } catch (e) {
-        log.error('Error @ release readHeldBalance', e);
+        log.error({ title: 'RB-WRITE-018 readHeldBalance', details: { error: (e && e.message) || String(e) } });
       }
       if (!out.indexed)
         log.audit({
@@ -2034,15 +2054,19 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       // §4.1.2 — the duplicate guard, claimed before anything else.
       try { bt.setValue({ fieldId: 'externalid', value: o.requestUuid }); }
-      catch (e) { /* not settable on this form; findBinTransfer still guards */ }
+      catch (e) {
+        log.error({ title: 'RB-WRITE-019 buildBinTransfer', details: (e && e.message) || String(e) }); /* not settable on this form; findBinTransfer still guards */
+      }
 
       try { bt.setValue({ fieldId: 'location', value: o.locationId }); }
-      catch (e) { /* mandatory - the save will say so */ }
+      catch (e) {
+        log.error({ title: 'RB-WRITE-020 buildBinTransfer', details: (e && e.message) || String(e) }); /* mandatory - the save will say so */
+      }
 
       const d = parseDate(o.date);
       if (d) {
         try { bt.setValue({ fieldId: 'trandate', value: d }); } catch (e) {
-          log.error('Error @ release buildBinTransfer trandate', e);
+          log.error({ title: 'RB-WRITE-021 buildBinTransfer', details: (e && e.message) || String(e) });
         }
       }
       try {
@@ -2052,7 +2076,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
             .substring(0, 999)
         });
       } catch (e) {
-        log.error('Error @ release buildBinTransfer memo', e);
+        log.error({ title: 'RB-WRITE-022 buildBinTransfer', details: (e && e.message) || String(e) });
       }
 
       // ══ ONE LINE PER ITEM, AND THE BINS GO ON THE DETAIL ══════════════
@@ -2118,7 +2142,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           sub = bt.getCurrentSublistSubrecord({
             sublistId: 'inventory', fieldId: 'inventorydetail'
           });
-        } catch (e) { sub = null; }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-023 buildBinTransfer', details: (e && e.message) || String(e) }); sub = null;
+        }
 
         if (sub) {
           group.forEach((m) => {
@@ -2155,7 +2181,14 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         bt.setCurrentSublistValue({
           sublistId: 'inventory', fieldId: fieldId, value: value
         });
-      } catch (e) { /* not on this form */ }
+      } catch (e) {
+        log.error({
+          title: 'RB-WRITE-024 btSet', details: {
+            field: fieldId, error: (e && e.message) || String(e),
+            note: 'Not on the Bin Transfer form.'
+          }
+        });
+      }
     };
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -2190,7 +2223,6 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
      * `custbody_jj_rb_release_log`, shape documented on C.TXN.releaseLog.
      */
     const emptyLedger = (receiptId) => ({
-      v: C.RELEASE_LEDGER.VERSION,
       receipt: String(receiptId || ''),
       seq: 0,
       updated: '',
@@ -2223,6 +2255,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         });
         raw = textOf(v[TXN.releaseLog]);
       } catch (e) {
+        log.error({ title: 'RB-WRITE-025 readLedger', details: (e && e.message) || String(e) });
         log.audit({
           title: 'RB release ledger could not be read: itemreceipt/' + receiptId,
           details: (e && e.message) || String(e)
@@ -2232,12 +2265,13 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       if (!raw) return out;
 
       let parsed = null;
-      try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+      try { parsed = JSON.parse(raw); } catch (e) {
+        log.error({ title: 'RB-WRITE-026 readLedger', details: (e && e.message) || String(e) }); parsed = null;
+      }
       if (!parsed || typeof parsed !== 'object') {
         log.error({
-          title: 'RB release ledger is not valid JSON: itemreceipt/' + receiptId,
-          details: {
-            raw: String(raw).substring(0, 500),
+          title: 'RB-WRITE-027 readLedger', details: {
+            context: 'RB release ledger is not valid JSON: itemreceipt/' + receiptId, raw: String(raw).substring(0, 500),
             effect: 'The release is refused. Replacing it with an empty ' +
               'ledger would give a duplicate call a clean slate, which is ' +
               'the one thing this field exists to prevent.'
@@ -2247,7 +2281,6 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         return out;
       }
 
-      out.v = Number(parsed.v) || C.RELEASE_LEDGER.VERSION;
       out.seq = Number(parsed.seq) || 0;
       out.updated = String(parsed.updated || '');
       out.lots = (parsed.lots && typeof parsed.lots === 'object') ? parsed.lots : {};
@@ -2387,12 +2420,20 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         }).run().each((r) => {
           const itemId = String(r.getValue('item') || '');
           if (!itemId) return true;
-          const lotId = String(r.getValue({ name: 'inventorynumber', join: 'inventoryDetail' }) || '');
-          const lotName = r.getText({ name: 'inventorynumber', join: 'inventoryDetail' }) || '';
-          const dq = Number(r.getValue({ name: 'quantity', join: 'inventoryDetail' }));
+          const lotId = String(r.getValue({
+            name: 'inventorynumber', join: 'inventoryDetail'
+          }) || '');
+          const lotName = r.getText({
+            name: 'inventorynumber', join: 'inventoryDetail'
+          }) || '';
+          const dq = Number(r.getValue({
+            name: 'quantity', join: 'inventoryDetail'
+          }));
           const lq = Math.abs(Number(r.getValue('quantity')) || 0);
           let raw = '';
-          try { raw = String(r.getValue(C.LINE.binMap) || ''); } catch (e) { raw = ''; }
+          try { raw = String(r.getValue(C.LINE.binMap) || ''); } catch (e) {
+            log.error({ title: 'RB-WRITE-028 seedFromSearch', details: (e && e.message) || String(e) }); raw = '';
+          }
           if (raw && !mapCache[raw]) mapCache[raw] = parseBinMap(raw);
           addEntitlement(ledger, itemId, lotId, lotName,
             Math.abs(dq || 0) || (lotId ? 0 : lq),
@@ -2401,6 +2442,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           return true;
         });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-029 seedFromSearch', details: (e && e.message) || String(e) });
         log.audit({
           title: 'RB release ledger — the inventoryDetail join is not available',
           details: (e && e.message) || String(e)
@@ -2414,19 +2456,20 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       let rec;
       try { rec = record.load({ type: 'itemreceipt', id: receiptId, isDynamic: false }); }
       catch (e) {
-        log.error({
-          title: 'RB release ledger — itemreceipt/' + receiptId + ' would not load',
-          details: (e && e.message) || String(e)
-        });
+        log.error({ title: 'RB-WRITE-030 seedFromLoad', details: { context: 'RB release ledger — itemreceipt/' + receiptId + ' would not load', error: (e && e.message) || String(e) } });
         return '';
       }
       let n = 0;
-      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) { n = 0; }
+      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) {
+        log.error({ title: 'RB-WRITE-031 seedFromLoad', details: (e && e.message) || String(e) }); n = 0;
+      }
       let rows = 0;
       for (let i = 0; i < n; i++) {
         const g = (f) => {
           try { return rec.getSublistValue({ sublistId: 'item', fieldId: f, line: i }); }
-          catch (e) { return ''; }
+          catch (e) {
+            log.error({ title: 'RB-WRITE-032 g', details: (e && e.message) || String(e) }); return '';
+          }
         };
         const itemId = String(g('item') || '');
         if (!itemId) continue;
@@ -2439,7 +2482,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           sub = rec.getSublistSubrecord({
             sublistId: 'item', fieldId: 'inventorydetail', line: i
           });
-        } catch (e) { sub = null; }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-033 seedFromLoad', details: (e && e.message) || String(e) }); sub = null;
+        }
 
         if (!sub) {
           addEntitlement(ledger, itemId, '', '', lineQty, binMapFor(lineMap, ''));
@@ -2448,7 +2493,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         }
         let m = 0;
         try { m = sub.getLineCount({ sublistId: 'inventoryassignment' }); }
-        catch (e) { m = 0; }
+        catch (e) {
+          log.error({ title: 'RB-WRITE-034 seedFromLoad', details: (e && e.message) || String(e) }); m = 0;
+        }
         if (!m) {
           addEntitlement(ledger, itemId, '', '', lineQty, binMapFor(lineMap, ''));
           rows++; continue;
@@ -2459,7 +2506,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
               return text
                 ? sub.getSublistText({ sublistId: 'inventoryassignment', fieldId: f, line: j })
                 : sub.getSublistValue({ sublistId: 'inventoryassignment', fieldId: f, line: j });
-            } catch (e) { return ''; }
+            } catch (e) {
+              log.error({ title: 'RB-WRITE-035 sg', details: (e && e.message) || String(e) }); return '';
+            }
           };
           const nm = String(sg('receiptinventorynumber', true) ||
             sg('issueinventorynumber', true) || '');
@@ -2606,7 +2655,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
 
       const values = {};
       values[TXN.releaseLog] = JSON.stringify({
-        v: C.RELEASE_LEDGER.VERSION, receipt: String(receiptId),
+        receipt: String(receiptId),
         seq: ledger.seq, updated: ledger.updated,
         lots: ledger.lots, calls: ledger.calls, bts: ledger.bts,
         callCount: ledger.callCount
@@ -2658,9 +2707,8 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           // does not know. The next release will see the old figures and may
           // move it again.
           log.error({
-            title: 'RB release LEDGER NOT WRITTEN: itemreceipt/' + receiptId,
-            details: {
-              binTransfer: btId, requestUuid: requestUuid,
+            title: 'RB-WRITE-036 commitLedger', details: {
+              context: 'RB release LEDGER NOT WRITTEN: itemreceipt/' + receiptId, binTransfer: btId, requestUuid: requestUuid,
               error: (e2 && e2.message) || String(e2),
               firstAttempt: (e && e.message) || String(e),
               consequence: 'The transfer SAVED and the receipt does not record ' +
@@ -2736,6 +2784,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       Object.keys(values).forEach((f) => {
         try { rec.setValue({ fieldId: f, value: values[f] }); }
         catch (e) {
+          log.error({ title: 'RB-WRITE-037 writeReceiptAndLines', details: (e && e.message) || String(e) });
           log.audit({
             title: 'RB release - itemreceipt.' + f + ' would not set',
             details: (e && e.message) || String(e)
@@ -2753,7 +2802,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       });
 
       let n = 0;
-      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) { n = 0; }
+      try { n = rec.getLineCount({ sublistId: 'item' }); } catch (e) {
+        log.error({ title: 'RB-WRITE-038 writeReceiptAndLines', details: (e && e.message) || String(e) }); n = 0;
+      }
       const claimed = {};
       const now = new Date();
 
@@ -2763,7 +2814,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           itemId = String(rec.getSublistValue({
             sublistId: 'item', fieldId: 'item', line: i
           }) || '');
-        } catch (e) { itemId = ''; }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-039 writeReceiptAndLines', details: (e && e.message) || String(e) }); itemId = '';
+        }
         if (!itemId) continue;
 
         // The lots this line carries.
@@ -2773,11 +2826,15 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           sub = rec.getSublistSubrecord({
             sublistId: 'item', fieldId: 'inventorydetail', line: i
           });
-        } catch (e) { sub = null; }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-040 writeReceiptAndLines', details: (e && e.message) || String(e) }); sub = null;
+        }
         if (sub) {
           let m = 0;
           try { m = sub.getLineCount({ sublistId: 'inventoryassignment' }); }
-          catch (e) { m = 0; }
+          catch (e) {
+            log.error({ title: 'RB-WRITE-041 writeReceiptAndLines', details: (e && e.message) || String(e) }); m = 0;
+          }
           for (let j = 0; j < m; j++) {
             let id = '';
             try {
@@ -2785,7 +2842,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
                 sublistId: 'inventoryassignment',
                 fieldId: 'receiptinventorynumber', line: j
               }) || '');
-            } catch (e) { id = ''; }
+            } catch (e) {
+              log.error({ title: 'RB-WRITE-042 writeReceiptAndLines', details: (e && e.message) || String(e) }); id = '';
+            }
             const k = lotLedgerKey(itemId, id);
             if (keys.indexOf(k) === -1) keys.push(k);
           }
@@ -2824,7 +2883,14 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           if (!f) return;
           try {
             rec.setSublistValue({ sublistId: 'item', fieldId: f, line: i, value: v });
-          } catch (e) { /* the column is not on this form */ }
+          } catch (e) {
+            log.error({
+              title: 'RB-WRITE-043 set', details: {
+                field: f, line: i, error: (e && e.message) || String(e),
+                note: 'The balance column is not on this form.'
+              }
+            });
+          }
         };
         // ALWAYS both numbers, zero included. A blank means the line
         // predates the field, not that nothing has been released - which
@@ -2878,7 +2944,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           columns: ['internalid']
         }).run().each((r) => { id = String(r.id); return false; });
       } catch (e) {
-        log.error('Error @ inbound findByExternalId', e);
+        log.error({ title: 'RB-WRITE-044 findByExternalId', details: { error: (e && e.message) || String(e) } });
       }
       return id;
     };
@@ -2903,6 +2969,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         out.locationName = labelOf(v.location);
         out.uuid = textOf(v[TXN.uuid]);
       } catch (e) {
+        log.error({ title: 'RB-WRITE-045 readOrder', details: (e && e.message) || String(e) });
         log.audit({
           title: 'RB inbound order could not be read: ' + map.fromType + '/' + orderId,
           details: (e && e.message) || String(e)
@@ -2918,7 +2985,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           });
           out.locationInactive = util.truthy(lv.isinactive);
           out.holdBin = textOf(lv[L.holdBin]);
-        } catch (e) { /* the field is not deployed; the default bin answers */ }
+        } catch (e) {
+          log.error({ title: 'RB-WRITE-046 readOrder', details: (e && e.message) || String(e) }); /* the field is not deployed; the default bin answers */
+        }
       }
       return out;
     };
@@ -2970,6 +3039,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         }).run().each((r) => { fill(r, true); return true; });
         return out;
       } catch (e) {
+        log.error({ title: 'RB-WRITE-047 itemInfo', details: (e && e.message) || String(e) });
         // The configured field is not deployed on every item type in this
         // account. Fall back WITHOUT it rather than failing the write, and
         // say so: `eligible` is then undefined and the mandatory-bin and
@@ -2984,7 +3054,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           type: 'item', filters: [['internalid', 'anyof', ids]], columns: cols
         }).run().each((r) => { fill(r, false); return true; });
       } catch (e) {
-        log.error('Error @ inbound readItems', e);
+        log.error({ title: 'RB-WRITE-048 itemInfo', details: { error: (e && e.message) || String(e) } });
       }
       return out;
     };
@@ -3013,6 +3083,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           return true;
         });
       } catch (e) {
+        log.error({ title: 'RB-WRITE-049 readSerialsOnHand', details: (e && e.message) || String(e) });
         // `anyof` on a text column is refused in some accounts. Not fatal: the
         // save itself refuses a duplicate serial, it just does so less kindly.
         log.audit({
@@ -3035,7 +3106,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         info.exists = true;
         info.name = textOf(v.binnumber);
         info.location = textOf(v.location);
-      } catch (e) { info.exists = false; }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-050 binInfo', details: (e && e.message) || String(e) }); info.exists = false;
+      }
       BIN_CACHE[key] = info;
       return info;
     };
@@ -3169,7 +3242,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           type: 'location', id: locationId, columns: [L.goodBin]
         });
         return textOf(v[L.goodBin]);
-      } catch (e) { return ''; }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-051 locationGoodBin', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -3227,7 +3302,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         const s = String(v || '');
         return /^[0-9]+$/.test(s) ? Number(s) : s;
       };
-      const base = { v: C.BIN_MAP.VERSION };
+      const base = {};
       if (h) base.h = num(h);
       if (g) base.g = num(g);
 
@@ -3326,7 +3401,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       const text = String(raw || '').trim();
       if (!text) return out;
       let p = null;
-      try { p = JSON.parse(text); } catch (e) { p = null; }
+      try { p = JSON.parse(text); } catch (e) {
+        log.error({ title: 'RB-WRITE-052 parseBinMap', details: (e && e.message) || String(e) }); p = null;
+      }
       if (!p || typeof p !== 'object') {
         log.audit({
           title: 'RB release - a bin/lot map is not valid JSON',
@@ -3435,7 +3512,15 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         rec.setCurrentSublistValue({
           sublistId: 'item', fieldId: fieldId, value: value
         });
-      } catch (e) { /* not on this form */ }
+      } catch (e) {
+        log.error({
+          title: 'RB-WRITE-053 setCur', details: {
+            field: fieldId, error: (e && e.message) || String(e),
+            note: 'The column is not on this form. Expected on a client ' +
+              'whose receipt or fulfilment form omits it.'
+          }
+        });
+      }
     };
     const setCurText = (rec, fieldId, text) => {
       if (!fieldId) return;
@@ -3443,21 +3528,43 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
         rec.setCurrentSublistText({
           sublistId: 'item', fieldId: fieldId, text: String(text)
         });
-      } catch (e) { /* not on this form, or not a list value */ }
+      } catch (e) {
+        log.error({
+          title: 'RB-WRITE-054 setCurText', details: {
+            field: fieldId, text: text,
+            error: (e && e.message) || String(e),
+            note: 'Not on this form, or not a list value.'
+          }
+        });
+      }
     };
     const subSet = (sub, fieldId, value) => {
       try {
         sub.setCurrentSublistValue({
           sublistId: 'inventoryassignment', fieldId: fieldId, value: value
         });
-      } catch (e) { /* not on this form */ }
+      } catch (e) {
+        log.error({
+          title: 'RB-WRITE-055 subSet', details: {
+            field: fieldId, error: (e && e.message) || String(e),
+            note: 'Not on the inventory detail of this item.'
+          }
+        }); /* not on this form */
+      }
     };
     const subSetText = (sub, fieldId, text) => {
       try {
         sub.setCurrentSublistText({
           sublistId: 'inventoryassignment', fieldId: fieldId, text: text
         });
-      } catch (e) { /* not on this form */ }
+      } catch (e) {
+        log.error({
+          title: 'RB-WRITE-056 subSetText', details: {
+            field: fieldId, error: (e && e.message) || String(e),
+            note: 'Not on the inventory detail of this item.'
+          }
+        }); /* not on this form */
+      }
     };
 
     /** The body fields, written once, after the record exists. */
@@ -3477,7 +3584,7 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
           options: { ignoreMandatoryFields: true }
         });
       } catch (e) {
-        log.error('Error @ inbound stampCreated ' + id, e);
+        log.error({ title: 'RB-WRITE-057 stampCreated', details: { context: 'Error @ inbound stampCreated ' + id, error: (e && e.message) || String(e) } });
       }
     };
 
@@ -3493,7 +3600,9 @@ define(['N/record', 'N/search', 'N/format', 'N/runtime',
       try {
         const d = format.parse({ value: v, type: format.Type.DATE });
         if (d && !isNaN(d.getTime())) return d;
-      } catch (e) { /* fall through */ }
+      } catch (e) {
+        log.error({ title: 'RB-WRITE-058 parseDate', details: (e && e.message) || String(e) }); /* fall through */
+      }
       const d2 = new Date(v);
       return isNaN(d2.getTime()) ? null : d2;
     };

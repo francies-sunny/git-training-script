@@ -53,6 +53,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
         if (ctx.type === ctx.UserEventType.COPY)
           txn.clearAllSyncFields(ctx.newRecord, entry);
       } catch (e) {
+        log.error({ title: 'RB-UE-001 beforeLoad', details: (e && e.message) || String(e) });
         logIo.exception(null, ctx && ctx.newRecord, e);
       }
     };
@@ -93,6 +94,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
           }
         });
       } catch (e) {
+        log.error({ title: 'RB-UE-002 beforeSubmit', details: (e && e.message) || String(e) });
         // Deliberately swallowed. A classification failure must not stop a
         // user saving a legitimate order.
         logIo.exception(entry, ctx.newRecord, e);
@@ -233,6 +235,7 @@ define(['N/runtime', '../Common/jj_rb_core', '../Common/jj_rb_io', '../Common/jj
           }
         });
       } catch (e) {
+        log.error({ title: 'RB-UE-003 afterSubmit', details: (e && e.message) || String(e) });
         // NEVER re-throw in afterSubmit: the record is already committed.
         logIo.exception(entry, ctx.newRecord, e);
       }

@@ -2703,3 +2703,179 @@ map with quantities, the one-line-per-item Bin Transfer with two lots through tw
 split-lot selection including the refusal and the payload override, the line balance columns across
 two releases, an untouched line keeping a blank date, and the submitFields fallback when the
 receipt will not save.
+
+---
+
+## Pass 33 — no version keys, and every catch says something
+
+### 1. `VERSION` is gone from `RELEASE_LEDGER` and `BIN_MAP`
+
+Neither was ever read as a decision. The ledger echoed `v` back and nothing branched on it; the bin
+map's `v` said "2" while the parser told v1 from v2 **structurally** — a bare `[hold, good]` pair
+versus a list of `[quantity, hold, good]` triples — which is the check that actually works, because
+it is true of the data rather than of a number somebody could edit.
+
+So both keys are dropped from the stored JSON:
+
+```json
+{"h":936,"g":940}
+{"h":936,"g":940,"l":{"LOT-B":[[10,0,941],[4,0,942]]}}
+```
+
+An ordinary line's map falls from 23 characters to **17**. A v1 value still parses, as before.
+
+`RELEASE_LEDGER.MAX_CALLS` and `BIN_MAP.MAX` stay — those are read.
+
+### 2. Every `catch` logs
+
+**209 catch blocks across nine scripts**, and 156 of them were silent — most deliberately, with a
+comment like `/* not on this form */`. Silent is defensible right up to the morning a field is
+missing in one client's account and the only evidence is a number that came out wrong.
+
+Every one now opens with:
+
+```js
+log.error({ title: 'RB <script> - <function>',
+  details: (e && e.message) || String(e) });
+```
+
+The function name is the **enclosing** one, derived by walking brace depth rather than grepping
+backwards — so `RB sync - flushAddressWrites` and `RB write - commitLedger`, not whichever local
+variable happened to be declared nearest. The original body and its comment are kept beneath;
+nothing changed about what the code does on failure.
+
+The six hot-path setters — `setCur`, `setCurText`, `subSet`, `subSetText`, `btSet` and the balance
+writer — name the **field** in the title and carry a note saying why the failure is expected:
+
+```js
+log.error({ title: 'RB write - setCur ' + fieldId,
+  details: { field: fieldId, error: ...,
+    note: 'The column is not on this form. Expected on a client whose ' +
+      'receipt or fulfilment form omits it.' } });
+```
+
+Those are the ones that will fill a log: they fire once per field per line when a column is not on
+the form. Naming the field is what makes the volume worth having — a client whose receipt form
+omits `custcol_jj_rb_exception_qty` now says so explicitly instead of quietly writing nothing.
+
+| Script | catches | newly logging |
+|---|---|---|
+| `jj_rb_core.js` | 11 | 7 |
+| `jj_rb_io.js` | 36 | 14 |
+| `jj_rb_sync.js` | 47 | 37 |
+| `jj_rb_txn.js` | 28 | 17 |
+| `jj_rl_rb_read.js` | 13 | 16* |
+| `jj_rl_rb_write.js` | 57 | 48 |
+| `jj_mu_rb_resync.js` | 3 | 3 |
+| `jj_ue_rb_txn.js` | 3 | 3 |
+| `jj_cs_rb_forms.js` | 11 | 11 |
+
+\* nested catches inside already-counted blocks.
+
+**973 assertions across 15 suites**, unchanged and all passing — which is the point of doing it
+mechanically.
+
+---
+
+## Pass 34 — every error title is a unique static code
+
+Pass 33 put a `log.error` in all 209 catch blocks, but the titles it generated were not fit for
+the purpose they exist for. Two faults:
+
+**Duplicates.** Six catches inside `writeReceiptAndLines` all logged `RB write -
+writeReceiptAndLines`. The log told you the function and stopped there — which, in a function that
+touches a sublist in six places, is the half of the answer you already had.
+
+**Dynamic titles.** The hot-path setters built theirs by concatenation: `'RB write - setCur ' +
+fieldId`. Nothing in the source matches what appears in the log, so a grep for the title a client
+pasted into a ticket finds nothing.
+
+### The scheme
+
+Every `log.error` across the nine scripts now carries a **unique static string literal**:
+
+```js
+log.error({ title: 'RB-WRITE-042 writeReceiptAndLines',
+  details: (e && e.message) || String(e) });
+```
+
+`RB-<SCRIPT>-<NNN>` is the searchable part — grep it and land on exactly one line. The function
+name after it is for reading the log, not for finding the line, so a duplicate there costs
+nothing. **221 codes, 221 distinct**, verified mechanically.
+
+Anything the old title carried that the code does not — a record id, a field name, an endpoint —
+moved into `details` under `context`, where it belongs. It was never a title: a title that changes
+per record is a title nobody can search for.
+
+| Prefix | Script | Codes |
+|---|---|---|
+| `RB-CORE-` | `jj_rb_core.js` | 14 |
+| `RB-IO-` | `jj_rb_io.js` | 37 |
+| `RB-SYNC-` | `jj_rb_sync.js` | 48 |
+| `RB-TXN-` | `jj_rb_txn.js` | 28 |
+| `RB-READ-` | `jj_rl_rb_read.js` | 19 |
+| `RB-WRITE-` | `jj_rl_rb_write.js` | 58 |
+| `RB-RESYNC-` | `jj_mu_rb_resync.js` | 3 |
+| `RB-UE-` | `jj_ue_rb_txn.js` | 3 |
+| `RB-FORMS-` | `jj_cs_rb_forms.js` | 11 |
+
+This also swept up the pre-existing `log.error('Error @ txn readHeader ' + recordType + '/' +
+recordId, e)` two-argument calls, which had the same disease and predate this work. They are now
+the same object form as everything else, with the record reference in `context`.
+
+### `ERROR-CODES.md`
+
+Generated from the source, beside `OBJECT-CHANGELOG.md`: code, function, file, line, in code
+order. **Regenerate it when the scripts change** — line numbers go stale, the codes do not.
+
+A support conversation is now: client pastes `RB-WRITE-042`, you grep, you are on the line. No
+reading of the message, no guessing which of six places in a function it came from.
+
+**973 assertions across 15 suites**, unchanged and all passing.
+
+---
+
+## Pass 35 — `log.error` takes two keys, and `context` is not one of them
+
+Pass 34 moved the dynamic parts of each title into a **third top-level key**:
+
+```js
+log.error({ title: 'RB-WRITE-027 readLedger',
+  context: 'itemreceipt/' + receiptId,          // <- not an API key
+  details: { ... } });
+```
+
+`N/log` accepts `options.title` and `options.details` and nothing else. The extra key was not an
+error, which is the problem — NetSuite ignored it silently, so **38 calls were dropping the one
+piece of information that says which record failed.** A log line reading `RB-WRITE-027 readLedger`
+with no receipt id is the shape of a bug that stays hidden until someone needs it.
+
+Everything that is not the title now lives **inside** `details`:
+
+```js
+log.error({ title: 'RB-WRITE-027 readLedger',
+  details: { context: 'itemreceipt/' + receiptId,
+    raw: String(raw).substring(0, 500),
+    error: (e && e.message) || String(e) } });
+```
+
+`details` takes any type; an object is `JSON.stringify`-ed by the platform and truncated past 3999
+characters, which these are nowhere near.
+
+Thirteen `context` values were dropped rather than moved — they were static strings like
+`'Error @ resolveUnits: '`, left over from the old two-argument calls. The title already says the
+function. A key that repeats the title is noise in a field that truncates.
+
+### The invariants, now checked mechanically
+
+- every `log.error` passes the object form with a `title`
+- every title is a **static string literal** — no concatenation
+- **221 titles, 221 distinct**
+- no key other than `title` and `details` at the top level of any `log.error`, `log.audit` or
+  `log.debug`
+- longest static title is 61 characters, against NetSuite's 99
+
+`ERROR-CODES.md` regenerated, and it now documents the two-key contract so the next person does not
+repeat this.
+
+**973 assertions across 15 suites**, all passing.

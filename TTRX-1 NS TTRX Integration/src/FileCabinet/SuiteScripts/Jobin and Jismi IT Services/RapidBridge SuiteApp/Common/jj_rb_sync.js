@@ -75,6 +75,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           }
           return { values: vals, dropped: dropped };
         } catch (e) {
+          log.error({ title: 'RB-SYNC-001 lookupSafe', details: (e && e.message) || String(e) });
           const msg = String((e && e.message) || e);
           // "... is not in proper syntax: altname"  →  altname
           const m = /invalid column[^:]*:\s*([A-Za-z0-9_.]+)/i.exec(msg);
@@ -188,7 +189,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           unit.sourceRecord = locationRecord;
           return { list: [unit] };
         } catch (e) {
-          log.error('Error @ resolveUnits location load: ' + recordType + '/' + recordId, e);
+          log.error({ title: 'RB-SYNC-002 resolveUnits', details: { context: 'Error @ resolveUnits location load: ' + recordType + '/' + recordId, error: (e && e.message) || String(e) } });
           return {
             list: [],
             blocked: 'Location ' + recordId +
@@ -208,7 +209,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         vals = lookupSafe(recordType, recordId, cols).values;
       } catch (e) {
-        log.error("Error @ resolveUnits: ", e);
+        log.error({ title: 'RB-SYNC-003 resolveUnits', details: { error: (e && e.message) || String(e) } });
         return {
           list: [], blocked: 'Record ' + recordType + '/' + recordId +
             ' could not be read: ' + e.message
@@ -266,7 +267,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           columns: dedupe(itemCols.filter(Boolean))
         });
       } catch (e) {
-        log.error("Error @ resolveUnits: ", e);
+        log.error({ title: 'RB-SYNC-004 resolveItemUnits', details: { error: (e && e.message) || String(e) } });
         return {
           list: [], blocked: 'Item ' + itemType + '/' + itemId +
             ' could not be read: ' + e.message
@@ -283,7 +284,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             columns: [C.MASTER.customrecord_jj_rb_dosage_form.fields.code]
           });
           dosageCode = textOf(d[C.MASTER.customrecord_jj_rb_dosage_form.fields.code]);
-        } catch (e) { /* left blank — the payload comparison will show it */ }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-005 resolveItemUnits', details: (e && e.message) || String(e) }); /* left blank — the payload comparison will show it */
+        }
       }
 
       const rows = [];
@@ -314,6 +317,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           return true;
         });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-006 resolveItemUnits', details: (e && e.message) || String(e) });
         return { list: [], blocked: 'UOM Detail rows unreadable: ' + e.message };
       }
 
@@ -729,7 +733,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     const binState = (item, cfg) => {
       let accountUsesBins = false;
       try { accountUsesBins = runtime.isFeatureInEffect({ feature: 'BINMANAGEMENT' }); }
-      catch (e) { accountUsesBins = false; }
+      catch (e) {
+        log.error({ title: 'RB-SYNC-007 binState', details: (e && e.message) || String(e) }); accountUsesBins = false;
+      }
       const itemUsesBins = util.truthy(item.usebins);
       return {
         is_bin_managed: !!(accountUsesBins && itemUsesBins && cfg.useBins === true),
@@ -1034,7 +1040,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             // escaping it would stop the parent syncing at all — a regression
             // on the old order, where the parent went first. The addresses log
             // their own failures; this is the last net under them.
-            log.error('Error @ address pre-pass ' + unit.recordType + '/' + unit.recordId, e);
+            log.error({ title: 'RB-SYNC-008 run', details: { context: 'Error @ address pre-pass ' + unit.recordType + '/' + unit.recordId, error: (e && e.message) || String(e) } });
             logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
           }
 
@@ -1179,11 +1185,10 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           mirrorUomRow(unit, { uuid: prior.uuid });
           if (unit.uuidField) {
             try {
-              log.debug("Write Adopted UUID to record", { type: unit.recordType, id: unit.recordId, field: unit.uuidField, value: prior.uuid });
               util.writeFields(unit.recordType, unit.recordId, { [unit.uuidField]: prior.uuid }, { ignoreMandatoryFields: true });
             } catch (e) {
               // Not fatal: the call below already uses the adopted value.
-              log.error({ title: 'RB could not write adopted UUID', details: e });
+              log.error({ title: 'RB-SYNC-009 run', details: e });
             }
           }
         }
@@ -1412,6 +1417,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const v = search.lookupFields({ type: C.REC.UOM, id: uomRowId, columns: [U.item] });
         itemId = textOf(v[U.item]);
       } catch (e) {
+        log.error({ title: 'RB-SYNC-010 runUomRow', details: (e && e.message) || String(e) });
         log.debug("Error @ runUomRow lookupFields: ", e);
         /* fall through to the record itself */
       }
@@ -1420,7 +1426,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       // than deciding there is no parent because one search would not answer.
       if (!itemId && newRecord) {
         try { itemId = textOf(newRecord.getValue({ fieldId: U.item })); }
-        catch (e) { log.debug("Error @ runUomRow newRecord read: ", e); }
+        catch (e) {
+          log.error({ title: 'RB-SYNC-011 runUomRow', details: (e && e.message) || String(e) }); log.debug("Error @ runUomRow newRecord read: ", e);
+        }
       }
 
       if (!itemId) {
@@ -1445,7 +1453,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             recordType: C.REC.UOM, recordId: uomRowId, uomId: uomRowId,
             lastTryField: U.lastTry, tryResultField: U.tryResult, errorField: U.error
           }, C.TRY.FAIL_PRE_API, null, msg);
-        } catch (e) { /* the exception above is the record that matters */ }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-012 runUomRow', details: (e && e.message) || String(e) }); /* the exception above is the record that matters */
+        }
         return [{ ok: false, blocked: 'parent item type unresolved' }];
       }
 
@@ -1488,6 +1498,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           details: { itemId: itemId, recordtype: textOf(v.recordtype) || null }
         });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-013 itemTypeOf', details: (e && e.message) || String(e) });
         log.debug({ title: 'RB itemTypeOf lookupFields failed', details: (e && e.message) || String(e) });
       }
 
@@ -1504,6 +1515,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const hit = known(t);
         if (hit) return hit;
       } catch (e) {
+        log.error({ title: 'RB-SYNC-014 itemTypeOf', details: (e && e.message) || String(e) });
         log.debug({ title: 'RB itemTypeOf search failed', details: (e && e.message) || String(e) });
       }
 
@@ -1519,7 +1531,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             details: { itemId: itemId, type: types[i] }
           });
           return types[i];
-        } catch (e) { /* not this type */ }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-015 itemTypeOf', details: (e && e.message) || String(e) }); /* not this type */
+        }
       }
 
       return null;
@@ -1539,9 +1553,8 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         // that is not valid on this item type all land here — and used to make
         // every item silently ineligible with nothing written anywhere.
         log.error({
-          title: 'RB eligibility field could not be read: ' + fieldId,
-          details: {
-            recordType: recordType, recordId: recordId,
+          title: 'RB-SYNC-016 isEligible', details: {
+            context: 'RB eligibility field could not be read: ' + fieldId, recordType: recordType, recordId: recordId,
             error: (e && e.message) || String(e),
             note: 'Treated as not eligible. Check the Eligibility Field setting ' +
               'on the RapidBridge Configuration.'
@@ -1786,6 +1799,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-017 clearRemoteIdentity', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1823,6 +1837,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           uuid: unit.storedUuid, payload: payloadStr, synced: true
         });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-018 healFromLog', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1893,6 +1908,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         util.writeFields(unit.recordType, unit.recordId, { [fieldId]: storageAreaUuid }, { ignoreMandatoryFields: true });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-019 syncLocationStorageArea', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1931,8 +1947,6 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (unit.tryResultField)
         values[unit.tryResultField] = lists.id(C.LIST.tryResult, C.TRY.SYNCED);
 
-      log.debug("Submitting fields to record", { details: { type: unit.recordType, id: unit.recordId, values: values } });
-
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
 
@@ -1951,7 +1965,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           syncLocationStorageArea(entry, unit, cfg, uuid);
         }
       } catch (e) {
-        log.error("Error @ writeBackSuccess: ", e);
+        log.error({ title: 'RB-SYNC-020 writeBackSuccess', details: { error: (e && e.message) || String(e) } });
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -1975,6 +1989,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-021 writeBackFailure', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: unit.recordType, id: unit.recordId }, e);
       }
     };
@@ -2017,6 +2032,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         try {
           util.writeFields(itemType, itemId, pv, { ignoreMandatoryFields: true });
         } catch (e) {
+          log.error({ title: 'RB-SYNC-022 rollUpItem', details: (e && e.message) || String(e) });
           logIo.exception(entry, { type: itemType, id: itemId }, e);
         }
         return;
@@ -2037,6 +2053,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         util.writeFields(itemType, itemId, values, { ignoreMandatoryFields: true });
       } catch (e) {
+        log.error({ title: 'RB-SYNC-023 rollUpItem', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: itemType, id: itemId }, e);
       }
     };
@@ -2078,7 +2095,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             type: parentType, id: parentId, columns: [parentEntry.fields.uuid]
           });
           return textOf(v[parentEntry.fields.uuid]) || null;
-        } catch (e) { return null; }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-024 readUuid', details: (e && e.message) || String(e) }); return null;
+        }
       };
 
       const existing = readUuid();
@@ -2120,6 +2139,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         });
         return textOf(v[C.MASTER.location.fields.uuid]);
       } catch (e) {
+        log.error({ title: 'RB-SYNC-025 storedLocationUuid', details: (e && e.message) || String(e) });
         log.audit({
           title: 'RB storedLocationUuid could not read location/' + locationId,
           details: (e && e.message) || String(e)
@@ -2133,12 +2153,16 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
     // ═══════════════════════════════════════════════════════════════════════════
 
     const readSub = (sub, f) => {
-      try { return sub.getValue({ fieldId: f }) || ''; } catch (e) { return ''; }
+      try { return sub.getValue({ fieldId: f }) || ''; } catch (e) {
+        log.error({ title: 'RB-SYNC-026 readSub', details: (e && e.message) || String(e) }); return '';
+      }
     };
 
     const addrFromSub = (sub, nickname, line, nsId) => {
       let subId = null;
-      try { subId = sub.id || null; } catch (e) { subId = null; }
+      try { subId = sub.id || null; } catch (e) {
+        log.error({ title: 'RB-SYNC-027 addrFromSub', details: (e && e.message) || String(e) }); subId = null;
+      }
 
       const a = {
         nickname: nickname || 'Main Address',
@@ -2176,6 +2200,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         const a = sub ? addrFromSub(sub, 'Main Address', null) : null;
         if (a) unit.addresses = [a];
       } catch (e) {
+        log.error({ title: 'RB-SYNC-028 locationAddresses', details: (e && e.message) || String(e) });
         logIo.exception(C.MASTER.location, { type: 'location', id: unit.recordId }, e);
       }
       return unit.addresses;
@@ -2205,13 +2230,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               fieldId: 'label', line: i
             }) || '';
           }
-          catch (e) { /* no label field on this form */ }
+          catch (e) {
+            log.error({ title: 'RB-SYNC-029 entityAddresses', details: (e && e.message) || String(e) }); /* no label field on this form */
+          }
           let nsId = '';
           try {
             nsId = rec.getSublistValue({
               sublistId: 'addressbook', fieldId: 'internalid', line: i
             }) || '';
-          } catch (e) { /* not exposed on this record type */ }
+          } catch (e) {
+            log.error({ title: 'RB-SYNC-030 entityAddresses', details: (e && e.message) || String(e) }); /* not exposed on this record type */
+          }
 
           const a = addrFromSub(sub, label || ('Address ' + (i + 1)), i, nsId);
           if (a) {
@@ -2225,11 +2254,14 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               a.defaultShipping = util.truthy(rec.getSublistValue({
                 sublistId: 'addressbook', fieldId: 'defaultshipping', line: i
               }));
-            } catch (e) { /* not on this record type */ }
+            } catch (e) {
+              log.error({ title: 'RB-SYNC-031 entityAddresses', details: (e && e.message) || String(e) }); /* not on this record type */
+            }
             unit.addresses.push(a);
           }
         }
       } catch (e) {
+        log.error({ title: 'RB-SYNC-032 entityAddresses', details: (e && e.message) || String(e) });
         logIo.exception(null, { type: unit.recordType, id: unit.recordId }, e);
       }
       return unit.addresses;
@@ -2406,8 +2438,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         }
         if (f.synced) unit.storedSynced = util.truthy(fresh[f.synced]);
       } catch (e) {
-        log.error('Error @ refreshStoredState: ' +
-          unit.recordType + '/' + unit.recordId, e);
+        log.error({
+          title: 'RB-SYNC-033 refreshStoredState', details: {
+            context: 'Error @ refreshStoredState: ' +
+              unit.recordType + '/' + unit.recordId, error: (e && e.message) || String(e)
+          }
+        });
       }
     };
 
@@ -2858,13 +2894,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
                 sublistId: 'addressbook',
                 fieldId: 'addressbookaddress', line: line
               });
-          } catch (e) { sub = null; }
+          } catch (e) {
+            log.error({ title: 'RB-SYNC-034 flushAddressWrites', details: (e && e.message) || String(e) }); sub = null;
+          }
 
           if (!sub) {
-            log.error({
-              title: 'RB address write-back found no subrecord',
-              details: { recordType: recordType, recordId: recordId, line: line }
-            });
+            log.error({ title: 'RB-SYNC-035 flushAddressWrites', details: { recordType: recordType, recordId: recordId, line: line } });
             return;
           }
 
@@ -2887,10 +2922,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               applied++;
             }
             catch (e) {
-              log.error({
-                title: 'RB address field not writable: ' + f,
-                details: (e && e.message) || String(e)
-              });
+              log.error({ title: 'RB-SYNC-036 flushAddressWrites', details: { context: 'RB address field not writable: ' + f, error: (e && e.message) || String(e) } });
             }
           });
         });
@@ -2905,6 +2937,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         rec.save({ ignoreMandatoryFields: true, enableSourcing: false });
         return true;
       } catch (e) {
+        log.error({ title: 'RB-SYNC-037 flushAddressWrites', details: (e && e.message) || String(e) });
         logIo.exception(entry, { type: recordType, id: recordId }, e);
         return false;
       }
@@ -2997,7 +3030,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         try {
           const fld = form.getField({ id: entry.fields[k] });
           if (fld) fld.updateDisplayType({ displayType: 'inline' });
-        } catch (e) { /* field not on this form */ }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-038 lockSyncFields', details: (e && e.message) || String(e) }); /* field not on this form */
+        }
       });
     };
 
@@ -3016,7 +3051,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
               fieldId: fid,
               value: (k === 'synced' || k === 'attention') ? false : ''
             });
-          } catch (e) { /* not on the form */ }
+          } catch (e) {
+            log.error({ title: 'RB-SYNC-039 clearAllSyncFields', details: (e && e.message) || String(e) }); /* not on the form */
+          }
         });
     };
 
@@ -3031,13 +3068,17 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
       if (entry.fields && entry.fields.uuid) {
         try { cached.uuid = oldRecord.getValue({ fieldId: entry.fields.uuid }) || ''; }
-        catch (e) { /* non-fatal */ }
+        catch (e) {
+          log.error({ title: 'RB-SYNC-040 cacheForDelete', details: (e && e.message) || String(e) }); /* non-fatal */
+        }
       }
       try {
         cached.name = oldRecord.getValue({ fieldId: 'name' }) ||
           oldRecord.getValue({ fieldId: 'itemid' }) || '';
       }
-      catch (e) { /* non-fatal */ }
+      catch (e) {
+        log.error({ title: 'RB-SYNC-041 cacheForDelete', details: (e && e.message) || String(e) }); /* non-fatal */
+      }
 
       if (entry.key === 'ITEM') {
         const U = C.MASTER.customrecord_jj_rb_uom_detail.fields;
@@ -3051,7 +3092,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
             if (u) cached.uomUuids.push(u);
             return true;
           });
-        } catch (e) { /* non-fatal */ }
+        } catch (e) {
+          log.error({ title: 'RB-SYNC-042 cacheForDelete', details: (e && e.message) || String(e) }); /* non-fatal */
+        }
       }
 
       DELETE_CACHE[key] = cached;
@@ -3100,7 +3143,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
 
         if (!out.length && entry.fields && entry.fields.uuid) {
           try { add(oldRecord.getValue({ fieldId: entry.fields.uuid }), null, 'oldRecord'); }
-          catch (e) { /* fall through to the log */ }
+          catch (e) {
+            log.error({ title: 'RB-SYNC-043 resolveDeleteUuids', details: (e && e.message) || String(e) }); /* fall through to the log */
+          }
         }
 
         if (!out.length) {
@@ -3135,10 +3180,12 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           [U.lastTry]: new Date(),
           [U.tryResult]: lists.id(C.LIST.tryResult, C.TRY.SYNCED)
         }, { ignoreMandatoryFields: true });
-        log.debug('RB orphaned UOM row cleared ' + uomRowId,
-          'parent item deleted; UUID and stored payload removed');
+        log.debug({
+          title: 'RB orphaned UOM row cleared ' + uomRowId,
+          details: 'parent item deleted; UUID and stored payload removed'
+        });
       } catch (e) {
-        log.error({ title: 'RB forgetUomRow ' + uomRowId, details: e });
+        log.error({ title: 'RB-SYNC-044 forgetUomRow', details: { context: 'RB forgetUomRow ' + uomRowId, error: e } });
       }
     };
 
@@ -3146,6 +3193,7 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       try {
         return runDelete(entry, oldRecord, cfg);
       } catch (e) {
+        log.error({ title: 'RB-SYNC-045 handleDelete', details: (e && e.message) || String(e) });
         // A delete has no master record left to stamp and no retry path, so an
         // exception here is invisible unless it becomes a work item.
         logIo.exception(entry, { type: oldRecord.type, id: oldRecord.id }, e, {
@@ -3214,7 +3262,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
       if (entry.key === 'BIN') {
         let locId = '';
         try { locId = textOf(oldRecord.getValue({ fieldId: 'location' })); }
-        catch (e) { locId = ''; }
+        catch (e) {
+          log.error({ title: 'RB-SYNC-046 runDelete', details: (e && e.message) || String(e) }); locId = '';
+        }
         const locUuid = locId ? storedLocationUuid(locId) : '';
         if (!locUuid) {
           logIo.recordNoCall({
@@ -3353,7 +3403,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           if (String(r.getValue('internalid')) !== String(rec.id)) clash++;
           return true;
         });
-      } catch (e) { return; }
+      } catch (e) {
+        log.error({ title: 'RB-SYNC-047 validateConfig', details: (e && e.message) || String(e) }); return;
+      }
 
       if (clash)
         throw new Error('Another RapidBridge Configuration row is already Active. ' +
@@ -3392,7 +3444,9 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
           }
           return true;
         });
-      } catch (e) { return; }
+      } catch (e) {
+        log.error({ title: 'RB-SYNC-048 validateUomRow', details: (e && e.message) || String(e) }); return;
+      }
 
       if (clash)
         throw new Error('This item already has an active UOM Detail row for "' + clash +

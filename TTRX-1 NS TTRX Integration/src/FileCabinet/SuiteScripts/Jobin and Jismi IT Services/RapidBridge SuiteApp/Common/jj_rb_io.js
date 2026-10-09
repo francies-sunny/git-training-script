@@ -154,7 +154,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         util.writeFields(C.REC.LOG, o.id, clean, { ignoreMandatoryFields: true });
         return true;
       } catch (e) {
-        log.error({ title: 'RB sync log write failed, retrying essentials', details: e });
+        log.error({ title: 'RB-IO-001 submitLog', details: e });
       }
 
       const essential = {};
@@ -171,7 +171,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
         return true;
       } catch (e2) {
-        log.error({ title: 'RB sync log write failed outright ' + o.id, details: e2 });
+        log.error({ title: 'RB-IO-002 submitLog', details: { context: 'RB sync log write failed outright ' + o.id, error: e2 } });
         return false;
       }
     };
@@ -215,7 +215,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           columns: [search.createColumn({ name: 'internalid', sort: search.Sort.DESC })]
         }).run().each((r) => { open.push(r.getValue('internalid')); return true; });
       } catch (e) {
-        log.error({ title: 'RB findOpenMain search', details: e });
+        log.error({ title: 'RB-IO-003 findOpenMain', details: e });
       }
       return open;
     };
@@ -254,7 +254,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       // The main record's target payload always tracks the LATEST intent.
       try {
         util.writeFields(C.REC.LOG, open[0], { [L.payload]: util.clip(payload || '', 100000) }, { ignoreMandatoryFields: true });
-      } catch (e) { /* non-fatal */ }
+      } catch (e) {
+        log.error({ title: 'RB-IO-004 resolveLogTarget', details: (e && e.message) || String(e) }); /* non-fatal */
+      }
 
       if (open.length > 1) {
         // ANOMALY, not an error. Two executions raced, or an earlier build
@@ -281,7 +283,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       try {
         const v = search.lookupFields({ type: C.REC.LOG, id: parentId, columns: [L.attempts] });
         return (Number(v[L.attempts]) || 0) + 1;
-      } catch (e) { return 1; }
+      } catch (e) {
+        log.error({ title: 'RB-IO-005 nextAttemptNo', details: (e && e.message) || String(e) }); return 1;
+      }
     };
 
     /** Subject block — written on every record, main and child alike. */
@@ -392,7 +396,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
 
       Object.keys(v).forEach((f) => {
         if (v[f] !== null && v[f] !== undefined) {
-          try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+          try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) {
+            log.error({ title: 'RB-IO-006 openCall', details: (e && e.message) || String(e) }); /* skip */
+          }
         }
       });
 
@@ -439,7 +445,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             [L.status]: lid(C.LIST.syncStatus, C.STATUS.OPEN_RETRYING)
           }, options: { ignoreMandatoryFields: true }
         });
-      } catch (e) { /* non-fatal */ }
+      } catch (e) {
+        log.error({ title: 'RB-IO-007 bumpParentAttempt', details: (e && e.message) || String(e) }); /* non-fatal */
+      }
     };
 
     /**
@@ -482,7 +490,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           type: C.REC.LOG, id: logRec.id, values: v,
           options: { ignoreMandatoryFields: true }
         });
-      } catch (e) { log.error({ title: 'RB closeCall', details: e }); }
+      } catch (e) { log.error({ title: 'RB-IO-008 closeCall', details: e }); }
 
       return {
         ok: o.outcome === C.OUTCOME.SUCCESS,
@@ -524,7 +532,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             [L.resolvedOn]: new Date()
           }, options: { ignoreMandatoryFields: true }
         });
-      } catch (e) { log.error({ title: 'RB closeSuccess', details: e }); }
+      } catch (e) { log.error({ title: 'RB-IO-009 closeSuccess', details: e }); }
     };
 
     /**
@@ -546,7 +554,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             [L.error]: util.clip(note || '', 3900)
           }, options: { ignoreMandatoryFields: true }
         });
-      } catch (e) { log.error({ title: 'RB restoreParent', details: e }); }
+      } catch (e) { log.error({ title: 'RB-IO-010 restoreParent', details: e }); }
     };
 
     /**
@@ -592,7 +600,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
         return true;
       } catch (e) {
-        log.error({ title: 'RB closeNoAction', details: e });
+        log.error({ title: 'RB-IO-011 closeNoAction', details: e });
         return false;
       }
     };
@@ -630,7 +638,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
         return true;
       } catch (e) {
-        log.error({ title: 'RB parkUnsent', details: e });
+        log.error({ title: 'RB-IO-012 parkUnsent', details: e });
         return false;
       }
     };
@@ -691,7 +699,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           });
           closed++;
         } catch (e) {
-          log.error({ title: 'RB closeStaleWorkItem ' + id, details: e });
+          log.error({ title: 'RB-IO-013 closeStaleWorkItem', details: { context: 'RB closeStaleWorkItem ' + id, error: e } });
         }
       });
       return closed;
@@ -704,7 +712,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       try {
         const cur = search.lookupFields({ type: C.REC.LOG, id: mainId, columns: [L.attempts] });
         attempts = Number(cur[L.attempts]) || 1;
-      } catch (e) { /* default 1 */ }
+      } catch (e) {
+        log.error({ title: 'RB-IO-014 closeFailure', details: (e && e.message) || String(e) }); /* default 1 */
+      }
 
       const maxRetries = Number(cfg && cfg.maxRetries) || 6;
       const retryable = res.errorClass === C.ERRCLASS.RETRYABLE;
@@ -747,7 +757,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           type: C.REC.LOG, id: mainId, values: v,
           options: { ignoreMandatoryFields: true }
         });
-      } catch (e) { log.error({ title: 'RB closeFailure', details: e }); }
+      } catch (e) { log.error({ title: 'RB-IO-015 closeFailure', details: e }); }
     };
 
     /**
@@ -789,7 +799,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             note: note
           }
         });
-      } catch (e) { log.error({ title: 'RB closeNeedsReview', details: e }); }
+      } catch (e) { log.error({ title: 'RB-IO-016 closeNeedsReview', details: e }); }
     };
 
     /** Exponential back-off with a ceiling. */
@@ -840,7 +850,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             type: C.REC.LOG, id: survivor, values: v2,
             options: { ignoreMandatoryFields: true }
           });
-        } catch (e) { log.error({ title: 'RB openDeferred join', details: e }); }
+        } catch (e) { log.error({ title: 'RB-IO-017 openDeferred', details: e }); }
 
         log.debug({
           title: 'RB openDeferred joined open work item ' + survivor,
@@ -879,7 +889,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         v[L.context] = String(runtime.executionContext);
         Object.keys(v).forEach((f) => {
           if (v[f] !== null && v[f] !== undefined) {
-            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) {
+              log.error({ title: 'RB-IO-018 openDeferred', details: (e && e.message) || String(e) }); /* skip */
+            }
           }
         });
         const id = rec.save({ ignoreMandatoryFields: true });
@@ -893,7 +905,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
         return id;
       } catch (e) {
-        log.error({ title: 'RB openDeferred', details: e });
+        log.error({ title: 'RB-IO-019 openDeferred', details: e });
         return null;
       }
     };
@@ -924,8 +936,6 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         // every worklist — Master Data Design v1.1 §11.12.
         const v = subjectValues(entry, unit, cfg, o.operation || C.OPERATION.CREATE,
           o.direction || C.DIRECTION.INBOUND);
-
-          log.debug("RB recordInbound subjectValues", v);
 
         v[L.ref] = makeRef(entry, unit);
         v[L.correlation] = o.correlation || util.uuid();
@@ -976,7 +986,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
 
         Object.keys(v).forEach((f) => {
           if (v[f] !== null && v[f] !== undefined) {
-            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) {
+              log.error({ title: 'RB-IO-020 recordInbound', details: (e && e.message) || String(e) }); /* skip */
+            }
           }
         });
         const id = rec.save({ ignoreMandatoryFields: true });
@@ -992,7 +1004,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       } catch (e) {
         // The record may already have been created. Losing the log row must
         // not lose the record, so this never throws.
-        log.error({ title: 'RB recordInbound', details: e });
+        log.error({ title: 'RB-IO-021 recordInbound', details: e });
         return null;
       }
     };
@@ -1034,10 +1046,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       try {
         util.writeFields(unit.recordType, unit.recordId, values, { ignoreMandatoryFields: true });
       } catch (e) {
-        log.error({
-          title: 'RB stampTry ' + unit.recordType + '/' + unit.recordId,
-          details: e
-        });
+        log.error({ title: 'RB-IO-022 stampTry', details: { context: 'RB stampTry ' + unit.recordType + '/' + unit.recordId, error: e } });
       }
     };
 
@@ -1048,9 +1057,10 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       // The execution log first, and unconditionally: whatever happens below,
       // the stack must survive.
       log.error({
-        title: 'RB exception — ' + (entry && entry.key) + ' ' +
-          (rec && rec.type) + '/' + (rec && rec.id),
-        details: (e && e.stack) || message
+        title: 'RB-IO-023 exception', details: {
+          context: 'RB exception — ' + (entry && entry.key) + ' ' +
+            (rec && rec.type) + '/' + (rec && rec.id), error: (e && e.stack) || message
+        }
       });
 
       // Then a work item, because an exception only in the execution log is an
@@ -1074,7 +1084,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           if (entry.fields.synced) v[entry.fields.synced] = false;
           util.writeFields(rec.type, rec.id, v, { ignoreMandatoryFields: true });
         } catch (inner) {
-          log.error({ title: 'RB exception could not stamp the record', details: inner });
+          log.error({ title: 'RB-IO-024 exception', details: inner });
         }
       }
 
@@ -1105,7 +1115,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             'record (or use Mass Update: Re-sync) to clear this work item.'
         });
       } catch (inner) {
-        log.error({ title: 'RB exception could not open a work item', details: inner });
+        log.error({ title: 'RB-IO-025 exception', details: inner });
       }
     };
 
@@ -1126,7 +1136,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
             }, options: { ignoreMandatoryFields: true }
           });
           merged++;
-        } catch (e) { log.error({ title: 'RB mergeDuplicates', details: e }); }
+        } catch (e) { log.error({ title: 'RB-IO-026 mergeDuplicates', details: e }); }
       });
       if (merged) {
         try {
@@ -1139,7 +1149,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
               [L.mergedCount]: (Number(cur[L.mergedCount]) || 0) + merged
             }, options: { ignoreMandatoryFields: true }
           });
-        } catch (e) { /* non-fatal */ }
+        } catch (e) {
+          log.error({ title: 'RB-IO-027 mergeDuplicates', details: (e && e.message) || String(e) }); /* non-fatal */
+        }
       }
       return merged;
     };
@@ -1171,7 +1183,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
     };
 
     const remainingUnits = () => {
-      try { return runtime.getCurrentScript().getRemainingUsage(); } catch (e) { return null; }
+      try { return runtime.getCurrentScript().getRemainingUsage(); } catch (e) {
+        log.error({ title: 'RB-IO-028 remainingUnits', details: (e && e.message) || String(e) }); return null;
+      }
     };
 
     /**
@@ -1262,10 +1276,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
 
       } catch (e) {
         // A broken safety net must never break the call it is protecting.
-        log.error({
-          title: 'RB lastSuccess search ' + unit.recordType + '/' + unit.recordId,
-          details: e
-        });
+        log.error({ title: 'RB-IO-029 lastSuccess', details: { context: 'RB lastSuccess search ' + unit.recordType + '/' + unit.recordId, error: e } });
         return null;
       }
     };
@@ -1318,7 +1329,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           return true;
         });
       } catch (e) {
-        log.error({ title: 'RB syncedUnitUuids item ' + itemId, details: e });
+        log.error({ title: 'RB-IO-030 syncedUnitUuids', details: { context: 'RB syncedUnitUuids item ' + itemId, error: e } });
       }
       log.debug({
         title: 'RB syncedUnitUuids item ' + itemId,
@@ -1416,7 +1427,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
 
         Object.keys(v).forEach((f) => {
           if (v[f] !== null && v[f] !== undefined) {
-            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) { /* skip */ }
+            try { rec.setValue({ fieldId: f, value: v[f] }); } catch (e) {
+              log.error({ title: 'RB-IO-031 recordNoCall', details: (e && e.message) || String(e) }); /* skip */
+            }
           }
         });
 
@@ -1431,7 +1444,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         });
         return id;
       } catch (e) {
-        log.error({ title: 'RB recordNoCall', details: e });
+        log.error({ title: 'RB-IO-032 recordNoCall', details: e });
         return null;
       }
     };
@@ -1488,10 +1501,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
           return true;
         });
       } catch (e) {
-        log.error({
-          title: 'RB syncedAddresses ' + parentRecordType + '/' + parentRecordId,
-          details: e
-        });
+        log.error({ title: 'RB-IO-033 syncedAddresses', details: { context: 'RB syncedAddresses ' + parentRecordType + '/' + parentRecordId, error: e } });
       }
 
       log.debug({
@@ -1599,6 +1609,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       try {
         url = buildUrl(o.endpoint, o.pathParams, cfg);
       } catch (e) {
+        log.error({ title: 'RB-IO-034 call', details: (e && e.message) || String(e) });
         const bad = openCall(o.target, {
           entry: o.entry, unit: o.unit, cfg: cfg, operation: o.operation,
           trigger: o.trigger, endpoint: String(o.endpoint.path), method: o.endpoint.method,
@@ -1652,6 +1663,7 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         // headers[cfg.authHeader || 'Authorization'] = secureValue(cfg);
         headers[cfg.authHeader || 'Authorization'] = String(cfg.secret || '');;
       } catch (e) {
+        log.error({ title: 'RB-IO-035 call', details: (e && e.message) || String(e) });
         return closeCall(logRec, {
           outcome: C.OUTCOME.FAILURE,
           errorClass: C.ERRCLASS.AUTH, errorCode: 'NO_SECRET', errorMessage: e.message
@@ -1686,7 +1698,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
         //   timeout: (Number(cfg.timeout) || 8) * 1000        // ALWAYS set
         // });
         log.debug("Response", { code: res.code, body: res.body });
-      } catch (e) { thrown = e; }
+      } catch (e) {
+        log.error({ title: 'RB-IO-036 call', details: (e && e.message) || String(e) }); thrown = e;
+      }
 
       const ms = Date.now() - started;
 
@@ -1723,7 +1737,9 @@ define(['N/https', 'N/record', 'N/search', 'N/runtime', './jj_rb_core'],
       if (closed.response) {
         try {
           util.writeFields(C.REC.LOG, logRec.id, { [L.response]: closed.response }, { ignoreMandatoryFields: true });
-        } catch (e) { /* non-fatal */ }
+        } catch (e) {
+          log.error({ title: 'RB-IO-037 call', details: (e && e.message) || String(e) }); /* non-fatal */
+        }
       }
       log.debug("Returning result from call()", { result });
       return result;
