@@ -2956,3 +2956,57 @@ shipments on the void guard, `create_default_storage_area` being unconditional, 
 Multiple Units of Measure off, and `po_nbr` on a sales order.
 
 **973 assertions across 15 suites**, all passing. No script changed in this pass.
+
+---
+
+## Pass 37 — the Bin stops guessing at storage-condition verification
+
+`is_storage_conditions_verification_disabled` is no longer sent. The Bin body is **five keys**:
+
+```json
+{
+  "custom_uuid": "",
+  "name": "HOLD-01",
+  "properties": "COLD;FROZEN",
+  "is_active": true,
+  "code": "Quarantine hold, dock 3"
+}
+```
+
+### Why it went
+
+It was derived from **Use Dosage Forms**, on the reasoning that an account maintaining dosage forms
+is one whose stock has storage conditions worth enforcing. That is an **inference, not a setting**,
+and it is wrong in both directions without saying so:
+
+> `false` on a client who never asked for cold-chain checks has TrackTrace refusing their receipts.
+> `true` on a pharmaceutical client silently removes the check they are relying on.
+
+Neither failure announces itself. A flag that means something else, read as a proxy for a
+decision nobody made, is worse than no flag — and a client can set Use Dosage Forms for reasons
+that have nothing to do with cold chain.
+
+**Omitted until TrackTraceRX states their default** for a bin that does not carry the key. That is
+a question for them, not a value for us to guess.
+
+### What it leaves open
+
+Recorded in `PENDING.md`:
+
+- If the destination's default is "verification on", the key may never need to come back.
+- If it is "off", the SuiteApp needs a **dedicated checkbox** on the Configuration — not a second
+  reading of Use Dosage Forms, which a client could set inconsistently with the first.
+
+The old entry asking for that checkbox is replaced by this, since the question is now narrower and
+has a specific person to answer it.
+
+### Updated
+
+`jj_rb_sync.js` (`buildBin`), `expected_payload.md` §2.6, `payload_guide.md`, `PENDING.md`.
+`t14` now asserts the key is **absent**, not blank, and pins the body to exactly
+`custom_uuid, name, properties, is_active, code`.
+
+The two developer documents carry the old behaviour and are **stale on this one key** — they will
+be correct at their next regeneration.
+
+**976 assertions across 15 suites**, all passing.

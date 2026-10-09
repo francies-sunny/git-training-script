@@ -814,20 +814,20 @@ define(['N/record', 'N/search', 'N/runtime', './jj_rb_core', './jj_rb_io'],
         custom_uuid: txt(unit.storedUuid),
         name: txt(d.binnumber),
         properties: binProperties(unit, entry).values.join(';'),
-        // TRUE unless this account handles pharmaceutical storage conditions.
+        // ── is_storage_conditions_verification_disabled IS NOT SENT ───────
         //
-        // USE DOSAGE FORMS IS THE PHARMA SWITCH this SuiteApp already has -
-        // an account that maintains dosage forms is one whose stock has
-        // storage conditions worth enforcing. There is no dedicated
-        // "enforce storage conditions" setting, and inventing a second
-        // pharma flag that a client could set inconsistently with the first
-        // is worse than reading the one that exists.
+        // It was, derived from Use Dosage Forms on the reasoning that an
+        // account maintaining dosage forms is one whose stock has storage
+        // conditions worth enforcing. That is an inference, not a setting,
+        // and getting it backwards is quiet in both directions: FALSE on a
+        // client who never asked for cold-chain checks has TrackTrace
+        // refusing their receipts; TRUE on a pharmaceutical client silently
+        // removes the check they are relying on.
         //
-        // Get it backwards either way and it is quiet: FALSE on a client who
-        // never asked for cold-chain checks has TrackTrace refusing their
-        // receipts; TRUE on a pharmaceutical client silently removes the
-        // check they are relying on. Say so when it is sent.
-        is_storage_conditions_verification_disabled: cfg.useDosage !== true,
+        // Omitted until TrackTraceRX says what their default is for a bin
+        // that does not carry the key. Leaving the decision with them beats
+        // guessing it from a flag that means something else.
+        // is_storage_conditions_verification_disabled: cfg.useDosage !== true,
         is_active: !util.truthy(d.isinactive),
         // Optional in the API. NetSuite's Bin has no code field of its own, so
         // the memo is where a client keeps one; empty is a legitimate value

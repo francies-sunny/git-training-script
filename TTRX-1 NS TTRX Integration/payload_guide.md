@@ -232,12 +232,14 @@ with its own `custom_uuid`.
   "custom_uuid": "",                                                  // Empty on create
   "name": "Test Hold Bin 1",                                          // binnumber
   "properties": "COLD;FROZEN",                                        // SEMICOLON-SEPARATED STRING. '' when none. Never an array
-  "is_storage_conditions_verification_disabled": false,               // True when Use Dosage Form is OFF
   "is_active": true,
   "code": "Quarantine hold, dock 3"                                   // The bin's memo - NetSuite has no code field on a Bin
 }
 ```
 
+> **`is_storage_conditions_verification_disabled` is deliberately NOT sent** — pending
+> TrackTraceRX confirming their default for a bin that omits it.
+>
 > **The location is not in the body** — it is a path segment, and the Location is pre-synced first.
 > `properties` values are upper-cased with spaces/hyphens turned into underscores, forced into the
 > order `COLD;FROZEN;RESTRICTED_ACCESS`. An unrecognised value **refuses the sync** and spends no
@@ -829,7 +831,7 @@ the goods already on the dock.
   "success": true,
   "list_id": "customlist_jj_rb_fulfil_exception",
   "submit_as": "name",                                                // Send the NAME on exception_reason, not the id
-  "count": 4,
+  "count": 7,
   "exception_reasons": [
     { "id": "2", "name": "Damaged on inspection" },
     { "id": "3", "name": "Expired or short-dated" },

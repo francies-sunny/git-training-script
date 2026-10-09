@@ -318,14 +318,13 @@ the wire.
 Gated by **Use Address** on the Configuration, and capped at **Max Inline Calls** (default 5)
 address calls per save; the rest are deferred.
 
-### 2.6 Bin → Storage Area — 6 keys
+### 2.6 Bin → Storage Area — 5 keys
 
 ```json
 {
   "custom_uuid": "",
   "name": "HOLD-01",
   "properties": "COLD;FROZEN",
-  "is_storage_conditions_verification_disabled": false,
   "is_active": true,
   "code": "Quarantine hold, dock 3"
 }
@@ -339,9 +338,15 @@ The Location is pre-synced first, and a bin whose location has no UUID is never 
 | `custom_uuid` | `custrecord_jj_rb_bin_uuid` |
 | `name` | `binnumber` |
 | `properties` | see below |
-| `is_storage_conditions_verification_disabled` | `Use Dosage Form` is **off** |
 | `is_active` | `NOT inactive` |
 | `code` | the bin's `memo`. NetSuite's Bin has no code field; the memo stands in |
+
+**`is_storage_conditions_verification_disabled` is NOT sent.** It was, derived from **Use Dosage
+Form** on the reasoning that an account maintaining dosage forms is one whose stock has storage
+conditions worth enforcing. That is an inference, not a setting, and getting it backwards is quiet
+in both directions: `false` on a client who never asked for cold-chain checks has TrackTrace
+refusing their receipts; `true` on a pharmaceutical client silently removes the check they rely on.
+The key is omitted until TrackTraceRX states their default for a bin that does not carry it.
 
 **`properties` is a semicolon-separated STRING**, never an array and never null. A bin with no
 special conditions sends `""`.
